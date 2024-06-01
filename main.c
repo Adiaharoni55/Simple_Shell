@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <stdbool.h>
+
 #include <signal.h>
 #define ARG_SIZE 6 // arg[0] = name of command, arg[1, 2, 3, 4] = arguments, arg[5] space for NULL
 #define INPUT_SIZE 1025
@@ -40,7 +42,7 @@ int cmd_count = 0, alias_count = 0, script_lines_count = 0, apostrophes_count = 
 
 int main() {
     char input[INPUT_SIZE];
-    while(1){
+    while(true){
         printf("#cmd:%d|#alias:%d|#script lines:%d> ", cmd_count, alias_count, script_lines_count);
         if(fgets(input, INPUT_SIZE, stdin) == NULL){
             continue;
@@ -48,7 +50,7 @@ int main() {
         input[strcspn(input, "\n")] = '\0';
         run_input_command(input);
         if(EXIT_FLAG != 0){
-            printf("%d", apostrophes_count);
+            printf("%d\n", apostrophes_count);
             break;
         }
     }
@@ -69,6 +71,7 @@ void run_input_command(const char* input){
     }
     int apostrophes = input_to_arg(input, arg);
     if(EXIT_FLAG != 0){
+        free_arg(arg);
         return;
     }
     if(apostrophes < 0) {
@@ -325,8 +328,10 @@ int run_shell_command(char* arg[]){
 
 void free_arg(char* arg[]){
     for(int i = 0; i < ARG_SIZE; i++){
-        free(arg[i]);
-        arg[i] = NULL;
+        if(arg[i] != NULL) {
+            free(arg[i]);
+            arg[i] = NULL;
+        }
     }
 }
 
