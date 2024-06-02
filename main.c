@@ -6,10 +6,9 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <stdbool.h>
-
-#include <signal.h>
-#define ARG_SIZE 6 // arg[0] = name of command, arg[1, 2, 3, 4] = arguments, arg[5] space for NULL
-#define INPUT_SIZE 1025
+#define ARG_SIZE (6) // arg[0] = name of command, arg[1, 2, 3, 4] = arguments, arg[5] space for NULL
+#define INPUT_SIZE (1025)
+#define ERROR_VALUE (-1)
 
 // struct NodeList for aliases and its functions:
 struct NodeList{
@@ -18,43 +17,50 @@ struct NodeList{
     struct NodeList* next;
 
 } typedef NodeList;
+
+// data struct to keep elements the functions use
+struct Data {
+    NodeList* alias_lst;
+    int cmd_count,
+            alias_count,
+            script_lines_count,
+            apostrophes_count;
+    bool exit_flag,
+            error_flag;
+} typedef Data;
+#define MALLOC_ERR(element, re) if(element == NULL) { perror("malloc"); return re; }
+
 void free_lst(NodeList* head);
 void free_node(NodeList** node);
-NodeList* push(NodeList *head, char* name, char* commend);
-NodeList* delete_node(NodeList* head, char* name);
+NodeList* push(NodeList *head, char* name, char* commend, Data* data);
+NodeList* delete_node(NodeList* head, char* name, Data* data);
 void print_lst(NodeList* head);
 
 // functions to run the terminal:
-int input_to_arg(const char* input, char* arg[]);
-void run_script_file(const char* file_name, char* arg[]);
+int input_to_arg(const char* input, char* arg[], Data* data);
+void run_script_file(const char* file_name, char* arg[], Data* data);
 int run_shell_command(char* arg[]);
-void run_input_command(const char* input);
+void run_input_command(const char* input, Data* data);
 void free_arg(char* arg[]);
-
-// helper functions:
-#define CHECK_FILE_NULL(fp) if(fp == NULL){ perror("Error opening file"); return; }
-#define MALLOC_ERR(element, re) if(element == NULL) { perror("malloc"); return re; }
 void skip_spaces_tabs(const char* str, int *index);
-
-//static elements:
-NodeList* alias_lst = NULL;
-int cmd_count = 0, alias_count = 0, script_lines_count = 0, apostrophes_count = 0, EXIT_FLAG = 0, ERROR_FLAG;
 
 int main() {
     char input[INPUT_SIZE];
+    Data data = {NULL, 0, 0, 0, 0, false, false};
     while(true){
-        printf("#cmd:%d|#alias:%d|#script lines:%d> ", cmd_count, alias_count, script_lines_count);
+        printf("#cmd:%d|#alias:%d|#script lines:%d> ",
+               data.cmd_count, data.alias_count, data.script_lines_count);
         if(fgets(input, INPUT_SIZE, stdin) == NULL){
             continue;
         }
         input[strcspn(input, "\n")] = '\0';
-        run_input_command(input);
-        if(EXIT_FLAG != 0){
-            printf("%d\n", apostrophes_count);
+        run_input_command(input, &data);
+        if(data.exit_flag){
+            printf("%d\n", data.apostrophes_count);
             break;
         }
     }
-    free_lst(alias_lst);
+    free_lst(data.alias_lst);
     return 0;
 }
 
@@ -63,14 +69,14 @@ int main() {
  * 2. checks if it's alias/unalias/shell command and runs it accordingly.
  * @param input command from user / line from file.
  */
-void run_input_command(const char* input){
-    ERROR_FLAG = 0;
+void run_input_command(const char* input, Data* data){
+    data -> error_flag = false;
     char* arg[ARG_SIZE];
     for(int i = 0; i < ARG_SIZE; i++){
         arg[i] = NULL;
     }
-    int apostrophes = input_to_arg(input, arg);
-    if(EXIT_FLAG != 0){
+    int apostrophes = input_to_arg(input, arg, data);
+    if(data->exit_flag){
         free_arg(arg);
         return;
     }
@@ -87,8 +93,8 @@ void run_input_command(const char* input){
 
     if(strcmp(arg[0], "alias") == 0){
         if(arg[1] == NULL){
-            print_lst(alias_lst);
-            cmd_count++;
+            print_lst(data->alias_lst);
+            data->cmd_count++;
             free_arg(arg);
             return;
         }
@@ -109,10 +115,10 @@ void run_input_command(const char* input){
                 free_arg(arg);
                 return;
             }
-            alias_lst = push(alias_lst ,arg[1], arg[2]);
+            data->alias_lst = push(data->alias_lst ,arg[1], arg[2], data);
             free_arg(arg);
-            apostrophes_count += apostrophes;
-            cmd_count++;
+            data->apostrophes_count += apostrophes;
+            data->cmd_count++;
             return;
         }
         if(strcmp(arg[2], "=") != 0|| arg[3] == NULL || arg[4] != NULL){
@@ -120,10 +126,10 @@ void run_input_command(const char* input){
             free_arg(arg);
             return;
         }
-        alias_lst = push(alias_lst, arg[1], arg[3]);
+        data->alias_lst = push(data->alias_lst, arg[1], arg[3], data);
         free_arg(arg);
-        apostrophes_count += apostrophes;
-        cmd_count++;
+        data->apostrophes_count += apostrophes;
+        data->cmd_count++;
         return;
     }
     if(strcmp(arg[0], "unalias") == 0){
@@ -132,10 +138,10 @@ void run_input_command(const char* input){
             free_arg(arg);
             return;
         }
-        alias_lst = delete_node(alias_lst, arg[1]);
+        data->alias_lst = delete_node(data->alias_lst, arg[1], data);
         free_arg(arg);
-        if(ERROR_FLAG == 0){
-            cmd_count++;
+        if(!data->error_flag){
+            data->cmd_count++;
             return;
         }
         printf("ERR\n");
@@ -154,15 +160,17 @@ void run_input_command(const char* input){
             free_arg(arg);
             return;
         }
-        run_script_file(arg[1], arg);
+        run_script_file(arg[1], arg, data);
         free_arg(arg);
-        cmd_count++;
+        if(!data->error_flag) {
+            data->cmd_count++;
+        }
         return;
     }
     int status = run_shell_command(arg);
     if (status == 0) {
-        cmd_count++;
-        apostrophes_count += apostrophes;
+        data->cmd_count++;
+        data->apostrophes_count += apostrophes;
     }
     free_arg(arg);
 }
@@ -187,7 +195,7 @@ int word_to_arg(const char* input, int arg_ind, int* input_ind, char* args[]){
         start++;
         while(input[*input_ind] != type){
             if(input[*input_ind] == '\0'){
-                return -1;
+                return ERROR_VALUE;
             }
             (*input_ind)++, arg_len++;
         }
@@ -214,26 +222,26 @@ int word_to_arg(const char* input, int arg_ind, int* input_ind, char* args[]){
  * turns input into an array of arguments using word_to_arg function.
  * @return how many argument are apostrophe type, if invalid apostrophe -> returns -1;
  */
-int input_to_arg(const char input[], char* arg[]){
+int input_to_arg(const char input[], char* arg[], Data* data){
     int input_ind = 0, arg_ind = 0;
     int apostrophe_update = word_to_arg(input, arg_ind, &input_ind, arg);
     if(apostrophe_update < 0){
-        return -1;
+        return ERROR_VALUE;
     }
-    if(arg[arg_ind] == NULL) return -1;
+    if(arg[arg_ind] == NULL) return ERROR_VALUE;
     if(strcmp(arg[arg_ind], "exit_shell") == 0){
-        EXIT_FLAG++;
+        data->exit_flag = true;
         return 0;
     }
     if(strcmp(arg[arg_ind], "alias") == 0 || strcmp(arg[arg_ind], "unalias") == 0){
         while(arg[arg_ind] != NULL){
             if(arg_ind >= ARG_SIZE - 1){
-                return -1;
+                return ERROR_VALUE;
             }
             arg_ind++;
             int AU = word_to_arg(input, arg_ind, &input_ind, arg);
             if(AU < 0){
-                return -1;
+                return ERROR_VALUE;
             }
             apostrophe_update += AU;
         }
@@ -241,25 +249,25 @@ int input_to_arg(const char input[], char* arg[]){
     }
     while(arg[arg_ind] != NULL){
         if(arg_ind >= ARG_SIZE - 1){
-            return -1;
+            return ERROR_VALUE;
         }
-        NodeList *temp = alias_lst;
+        NodeList *temp = data->alias_lst;
         while(temp != NULL){
             if(strcmp(temp->alias, arg[arg_ind]) == 0){
                 int command_ind = 0;
                 int AU = word_to_arg(temp->commend, arg_ind, &command_ind, arg);
                 if(AU < 0){
-                    return - 1;
+                    return ERROR_VALUE;
                 }
                 apostrophe_update+=AU;
                 while(arg[arg_ind] != NULL){
                     if(arg_ind >= ARG_SIZE - 1){
-                        return - 1;
+                        return ERROR_VALUE;
                     }
                     arg_ind++;
                     AU = word_to_arg(temp->commend, arg_ind, &command_ind, arg);
                     if(AU < 0){
-                        return - 1;
+                        return ERROR_VALUE;
                     }
                     apostrophe_update += AU;
                 }
@@ -269,8 +277,8 @@ int input_to_arg(const char input[], char* arg[]){
         }
         arg_ind++;
         int AU = word_to_arg(input, arg_ind, &input_ind, arg);
-        if(AU < 0){
-            return -1;
+        if(AU < 0) {
+            return ERROR_VALUE;
         }
         apostrophe_update += AU;
     }
@@ -279,23 +287,32 @@ int input_to_arg(const char input[], char* arg[]){
 
 /**
  * go over file and runs evey line as a command.
- * skips emty lines and comment lines(#).
+ * skips empty lines and comment lines(#).
  */
-void run_script_file(const char* file_name, char* arg[]){
+void run_script_file(const char* file_name, char* arg[], Data* data){
     FILE *fp = fopen(file_name, "r");
-    CHECK_FILE_NULL(fp)
+    if(fp == NULL){
+        data->error_flag = true;
+        perror("Error opening file");
+        return;
+    }
     free_arg(arg);
+    //check if first there is #!/bin/bash
     char command[INPUT_SIZE];
+    if(fgets(command, INPUT_SIZE, fp) == NULL || strcmp(command, "#!/bin/bash\n") != 0){
+        printf("ERR\n");
+        data->error_flag = true;
+        return;
+    }
+    data->script_lines_count ++; // for the first line of bash command
     while(fgets(command, INPUT_SIZE, fp) != NULL){
+        data->script_lines_count++;
         command[strcspn(command, "\n")] = '\0';
         int i = 0;
         skip_spaces_tabs(command, &i);
-        if (command[i] == '\0' || command[i] == '#') {
-            continue;
+        if (command[i] != '\0' && command[i] != '#') {
+            run_input_command(command, data);
         }
-        script_lines_count++;
-        run_input_command(command);
-
     }
     free_arg(arg);
     fclose(fp);
@@ -309,7 +326,7 @@ int run_shell_command(char* arg[]){
     pid_t pid = fork();
     if (pid < 0) {
         perror("fork"); // fork error
-        return -1;
+        return ERROR_VALUE;
     } else if (pid > 0) { // parent
         int status;
         waitpid(pid, &status, 0);
@@ -317,7 +334,7 @@ int run_shell_command(char* arg[]){
             return WEXITSTATUS(status);
         } else {
             // Child process did not terminate normally
-            return -1;
+            return ERROR_VALUE;
         }
     } else { // child
         execvp(arg[0], arg);
@@ -337,8 +354,7 @@ void free_arg(char* arg[]){
 
 void free_node(NodeList** node){
     // free one node in the list
-    if(node == NULL)
-        return;
+    if(node == NULL) return;
     free((*node)->alias);
     free((*node)->commend);
     (*node)->alias = NULL;
@@ -352,7 +368,7 @@ void free_node(NodeList** node){
  * @param name the shortcut the user want to use for the command.
  * @return the new head of the list.
  */
-NodeList* push(NodeList *head, char* name, char* commend){
+NodeList* push(NodeList *head, char* name, char* commend, Data* data){
     NodeList* temp = head;
     while (temp != NULL) {
         if (strcmp(name, temp->alias) == 0) {
@@ -372,7 +388,7 @@ NodeList* push(NodeList *head, char* name, char* commend){
     new_node->commend = strdup(commend);
     new_node->next = head;
 
-    alias_count++;
+    data->alias_count++;
     return new_node;
 }
 
@@ -381,15 +397,16 @@ NodeList* push(NodeList *head, char* name, char* commend){
  * If name doesnt exist: The list will stay the same, and print ERR.
  * @return the head of the list.
  */
-NodeList* delete_node(NodeList* head, char* name){
+NodeList* delete_node(NodeList* head, char* name, Data* data){
     if(head == NULL){
-        ERROR_FLAG++;
+
+        data->error_flag = true;
         return NULL;
     }
     if(strcmp(head->alias, name) == 0){
         NodeList *temp = head->next;
         free_node(&head);
-        alias_count--;
+        data->alias_count--;
         return temp;
     }
     NodeList *del = NULL;
@@ -398,12 +415,12 @@ NodeList* delete_node(NodeList* head, char* name){
             del = head->next;
             head->next = head->next->next;
             free_node(&del);
-            alias_count--;
+            data->alias_count--;
             return head;
         }
         head = head->next;
     }
-    ERROR_FLAG++;
+    data->error_flag = true;
     return head;
 }
 

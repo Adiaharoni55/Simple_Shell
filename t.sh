@@ -1,14 +1,9 @@
-echo start
+#!/bin/bash
 
-echo "one more ap'"
+echo start 
 
-hrgsh
-
-echo "CCone line not goo
+wds
 
 alias ll = 'ls -l'
 ll
-alias
-echo done
-
-hello
+echo '9 lines'
