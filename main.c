@@ -28,7 +28,6 @@ struct Data {
     bool exit_flag,
             error_flag;
 } typedef Data;
-#define MALLOC_ERR(element, re) if(element == NULL) { perror("malloc"); return re; }
 
 void free_lst(NodeList* head);
 void free_node(NodeList** node);
@@ -37,12 +36,14 @@ NodeList* delete_node(NodeList* head, char* name, Data* data);
 void print_lst(NodeList* head);
 
 // functions to run the terminal:
+int word_to_arg(const char* input, int arg_ind, int* input_ind, char* args[]);
 int input_to_arg(const char* input, char* arg[], Data* data);
 void run_script_file(const char* file_name, char* arg[], Data* data);
 int run_shell_command(char* arg[]);
 void run_input_command(const char* input, Data* data);
 void free_arg(char* arg[]);
 void skip_spaces_tabs(const char* str, int *index);
+#define MALLOC_ERR(element, re) if(element == NULL) { perror("malloc"); return re; }
 
 int main() {
     char input[INPUT_SIZE];
@@ -117,7 +118,7 @@ void run_input_command(const char* input, Data* data){
             }
             data->alias_lst = push(data->alias_lst ,arg[1], arg[2], data);
             free_arg(arg);
-            data->apostrophes_count += apostrophes;
+            if(apostrophes > 0) data->apostrophes_count++;
             data->cmd_count++;
             return;
         }
@@ -128,7 +129,7 @@ void run_input_command(const char* input, Data* data){
         }
         data->alias_lst = push(data->alias_lst, arg[1], arg[3], data);
         free_arg(arg);
-        data->apostrophes_count += apostrophes;
+        if(apostrophes > 0) data->apostrophes_count++;
         data->cmd_count++;
         return;
     }
@@ -141,6 +142,7 @@ void run_input_command(const char* input, Data* data){
         data->alias_lst = delete_node(data->alias_lst, arg[1], data);
         free_arg(arg);
         if(!data->error_flag){
+            if(apostrophes > 0) data->apostrophes_count++;
             data->cmd_count++;
             return;
         }
@@ -163,6 +165,7 @@ void run_input_command(const char* input, Data* data){
         run_script_file(arg[1], arg, data);
         free_arg(arg);
         if(!data->error_flag) {
+            if(apostrophes > 0) data->apostrophes_count++;
             data->cmd_count++;
         }
         return;
@@ -170,7 +173,7 @@ void run_input_command(const char* input, Data* data){
     int status = run_shell_command(arg);
     if (status == 0) {
         data->cmd_count++;
-        data->apostrophes_count += apostrophes;
+        if(apostrophes > 0) data->apostrophes_count++;
     }
     free_arg(arg);
 }
