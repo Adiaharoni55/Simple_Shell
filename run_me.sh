@@ -1,4 +1,4 @@
 #!/bin/bash
-gcc main.c -o ex1 -Wall
+gcc ex1.c -o ex1 -Wall
 ./ex1
 

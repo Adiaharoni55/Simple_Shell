@@ -57,7 +57,7 @@ int main() {
         input[strcspn(input, "\n")] = '\0';
         run_input_command(input, &data);
         if(data.exit_flag){
-            printf("%d\n", data.apostrophes_count);
+            printf("%d", data.apostrophes_count);
             break;
         }
     }
@@ -72,75 +72,75 @@ int main() {
  */
 void run_input_command(const char* input, Data* data){
     data -> error_flag = false;
-    char* arg[ARG_SIZE];
+    char* args[ARG_SIZE];
     for(int i = 0; i < ARG_SIZE; i++){
-        arg[i] = NULL;
+        args[i] = NULL;
     }
-    int apostrophes = input_to_arg(input, arg, data);
+    int apostrophes = input_to_arg(input, args, data);
     if(data->exit_flag){
-        free_arg(arg);
+        free_arg(args);
         return;
     }
     if(apostrophes < 0) {
         printf("ERR\n");
-        free_arg(arg);
+        free_arg(args);
         return;
     }
-    if(arg[0] == NULL){
+    if(args[0] == NULL){
         printf("ERR\n");
-        free_arg(arg);
+        free_arg(args);
         return;
     }
 
-    if(strcmp(arg[0], "alias") == 0){
-        if(arg[1] == NULL){
+    if(strcmp(args[0], "alias") == 0){
+        if(args[1] == NULL){
             print_lst(data->alias_lst);
             data->cmd_count++;
-            free_arg(arg);
+            free_arg(args);
             return;
         }
-        if(arg[2] == NULL){
+        if(args[2] == NULL){
             printf("ERR\n"); // invalid alias
-            free_arg(arg);
+            free_arg(args);
             return;
         }
-        if(arg[1][(int) strlen(arg[1]) - 1] == '='){
-            if(arg[3] != NULL){
+        if(args[1][(int) strlen(args[1]) - 1] == '='){
+            if(args[3] != NULL){
                 printf("ERR\n"); // invalid alias
-                free_arg(arg);
+                free_arg(args);
                 return;
             }
-            arg[1][(int) strlen(arg[1]) - 1] = '\0';
-            if(strlen(arg[1]) == 0){
+            args[1][(int) strlen(args[1]) - 1] = '\0';
+            if(strlen(args[1]) == 0){
                 printf("ERR\n"); // no name for alias
-                free_arg(arg);
+                free_arg(args);
                 return;
             }
-            data->alias_lst = push(data->alias_lst ,arg[1], arg[2], data);
-            free_arg(arg);
+            data->alias_lst = push(data->alias_lst ,args[1], args[2], data);
+            free_arg(args);
             if(apostrophes > 0) data->apostrophes_count++;
             data->cmd_count++;
             return;
         }
-        if(strcmp(arg[2], "=") != 0|| arg[3] == NULL || arg[4] != NULL){
+        if(strcmp(args[2], "=") != 0|| args[3] == NULL || args[4] != NULL){
             printf("ERR\n"); // no name for alias
-            free_arg(arg);
+            free_arg(args);
             return;
         }
-        data->alias_lst = push(data->alias_lst, arg[1], arg[3], data);
-        free_arg(arg);
+        data->alias_lst = push(data->alias_lst, args[1], args[3], data);
+        free_arg(args);
         if(apostrophes > 0) data->apostrophes_count++;
         data->cmd_count++;
         return;
     }
-    if(strcmp(arg[0], "unalias") == 0){
-        if(arg[1] == NULL || arg[2]!= NULL){
+    if(strcmp(args[0], "unalias") == 0){
+        if(args[1] == NULL || args[2]!= NULL){
             printf("ERR\n"); // no name for alias
-            free_arg(arg);
+            free_arg(args);
             return;
         }
-        data->alias_lst = delete_node(data->alias_lst, arg[1], data);
-        free_arg(arg);
+        data->alias_lst = delete_node(data->alias_lst, args[1], data);
+        free_arg(args);
         if(!data->error_flag){
             if(apostrophes > 0) data->apostrophes_count++;
             data->cmd_count++;
@@ -149,33 +149,49 @@ void run_input_command(const char* input, Data* data){
         printf("ERR\n");
         return;
     }
-    if(strcmp(arg[0], "source") == 0){
-        if(arg[1] == NULL || arg[2] != NULL){
+    if(strcmp(args[0], "source") == 0){
+        if(args[1] == NULL || args[2] != NULL){
             printf("ERR\n");
-            free_arg(arg);
+            free_arg(args);
             return;
         }
-        int name_len = (int)strlen(arg[1]);
+        int name_len = (int)strlen(args[1]);
         // check if file is .sh
-        if(name_len < 4 || arg[1][name_len - 3] != '.' || arg[1][name_len - 2] != 's' || arg[1][name_len - 1] != 'h') {
+        if(name_len < 4 || args[1][name_len - 3] != '.' || args[1][name_len - 2] != 's' || args[1][name_len - 1] != 'h') {
             printf("ERR\n");
-            free_arg(arg);
+            free_arg(args);
             return;
         }
-        run_script_file(arg[1], arg, data);
-        free_arg(arg);
+        run_script_file(args[1], args, data);
+        free_arg(args);
         if(!data->error_flag) {
             if(apostrophes > 0) data->apostrophes_count++;
             data->cmd_count++;
         }
         return;
     }
-    int status = run_shell_command(arg);
+    if(strcmp(args[0], "cd") == 0){
+        if (args[1] == NULL) {
+            printf("ERR\n");
+            free_arg(args);
+            return;
+
+        }
+        if (chdir(args[1]) == -1) {
+            perror("cd");
+            free_arg(args);
+            return;
+        }
+        data->cmd_count++;
+        free_arg(args);
+        return;
+    }
+    int status = run_shell_command(args);
     if (status == 0) {
         data->cmd_count++;
         if(apostrophes > 0) data->apostrophes_count++;
     }
-    free_arg(arg);
+    free_arg(args);
 }
 
 /**
@@ -307,7 +323,6 @@ void run_script_file(const char* file_name, char* arg[], Data* data){
         data->error_flag = true;
         return;
     }
-    data->script_lines_count ++; // for the first line of bash command
     while(fgets(command, INPUT_SIZE, fp) != NULL){
         data->script_lines_count++;
         command[strcspn(command, "\n")] = '\0';
@@ -402,7 +417,6 @@ NodeList* push(NodeList *head, char* name, char* commend, Data* data){
  */
 NodeList* delete_node(NodeList* head, char* name, Data* data){
     if(head == NULL){
-
         data->error_flag = true;
         return NULL;
     }
@@ -412,18 +426,23 @@ NodeList* delete_node(NodeList* head, char* name, Data* data){
         data->alias_count--;
         return temp;
     }
-    NodeList *del = NULL;
-    while(head->next != NULL){
-        if(strcmp(head->next->alias, name) == 0){
-            del = head->next;
-            head->next = head->next->next;
-            free_node(&del);
-            data->alias_count--;
-            return head;
-        }
-        head = head->next;
+    NodeList * current = head;
+    NodeList * prev = NULL;
+    while (current != NULL && strcmp(current->alias, name) != 0) {
+        prev = current;
+        current = current->next;
     }
-    data->error_flag = true;
+    if (current == NULL) {
+        data->error_flag = true;
+        return head;
+    }
+    if (prev == NULL) {
+        head = head->next;
+    } else {
+        prev->next = current->next;
+    }
+    free_node(&current);
+    data->alias_count--;
     return head;
 }
 

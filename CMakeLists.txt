@@ -3,4 +3,6 @@ project(OS_ex1 C)
 
 set(CMAKE_C_STANDARD 11)
 
-add_executable(OS_ex1 main.c)
+add_executable(OS_ex1 ex1.c
+        ex1.c
+        ex1.c)
