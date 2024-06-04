@@ -43,7 +43,7 @@ int run_shell_command(char* arg[], Data* data);
 void run_input_command(const char* input, Data* data);
 void free_arg(char* arg[]);
 void skip_spaces_tabs(const char* str, int *index);
-#define ASSERT_MALLOC(condition, re) if(!(condition)) { perror("malloc"); free_lst(data->alias_lst); free_arg(args); exit(EXIT_FAILURE); }
+#define ASSERT_MALLOC(condition) if(!(condition)) { perror("malloc"); free_lst(data->alias_lst); free_arg(args); exit(EXIT_FAILURE); }
 #define ASSERT_AND_FREE(condition) if (!(condition)) { printf("ERR\n"); free_arg(args); return; }
 
 int main() {
@@ -156,7 +156,7 @@ void run_input_command(const char* input, Data* data){
  * @param input command from user / line from file.
  * @param arg_ind the place in th array to put the argument in.
  * @param input_ind where to start reading the input.
- * @return  if the argument was an apostrophe type, if invalid apostrophe -> returns -1;
+ * @return  if the argument was an apostrophe type. if invalid apostrophe: raises error flag;
  */
 int word_to_arg(const char* input, int arg_ind, int* input_ind, char* args[], Data* data){
     if(args[arg_ind] != NULL){
@@ -207,7 +207,7 @@ int word_to_arg(const char* input, int arg_ind, int* input_ind, char* args[], Da
         }
     }
     args[arg_ind] = (char *) malloc(arg_len);
-    ASSERT_MALLOC(args[arg_ind] != NULL, ERROR_VALUE)
+    ASSERT_MALLOC(args[arg_ind] != NULL)
     for(int i = 0; i < arg_len - 1; i++, start++){
         args[arg_ind][i] = input[start];
     }
@@ -226,55 +226,43 @@ int word_to_arg(const char* input, int arg_ind, int* input_ind, char* args[], Da
 int input_to_arg(const char input[], char* args[], Data* data){
     int input_ind = 0, arg_ind = 0;
     int apostrophe_update = word_to_arg(input, arg_ind, &input_ind, args, data);
-    if(apostrophe_update < 0){
+    if(apostrophe_update < 0) {
         return ERROR_VALUE;
     }
-    if(args[arg_ind] == NULL) return ERROR_VALUE;
-    if(strcmp(args[arg_ind], "exit_shell") == 0){
-        data->exit_flag = true;
+    if(args[arg_ind] == NULL){
         return 0;
     }
-    if(strcmp(args[arg_ind], "alias") == 0 || strcmp(args[arg_ind], "unalias") == 0){
-        while(args[arg_ind] != NULL){
-            if(arg_ind >= ARG_SIZE - 1){
-                return ERROR_VALUE;
-            }
-            arg_ind++;
-            int AU = word_to_arg(input, arg_ind, &input_ind, args, data);
-            if(AU < 0){
+    if(strcmp(args[arg_ind], "exit_shell") == 0){
+        data->exit_flag = true;
+        return apostrophe_update;
+    }
+    NodeList *temp = data->alias_lst;
+    while(temp != NULL) {
+        if (strcmp(temp->alias, args[arg_ind]) == 0) {
+            int command_ind = 0;
+            int AU = word_to_arg(temp->commend, arg_ind, &command_ind, args, data);
+            if (AU < 0) {
                 return ERROR_VALUE;
             }
             apostrophe_update += AU;
+            while (args[arg_ind] != NULL) {
+                if (arg_ind >= ARG_SIZE - 1) {
+                    return ERROR_VALUE;
+                }
+                arg_ind++;
+                AU = word_to_arg(temp->commend, arg_ind, &command_ind, args, data);
+                if (AU < 0) {
+                    return ERROR_VALUE;
+                }
+                apostrophe_update += AU;
+            }
+            arg_ind--;
         }
-        return apostrophe_update;
+        temp = temp->next;
     }
     while(args[arg_ind] != NULL){
         if(arg_ind >= ARG_SIZE - 1){
             return ERROR_VALUE;
-        }
-        NodeList *temp = data->alias_lst;
-        while(temp != NULL){
-            if(strcmp(temp->alias, args[arg_ind]) == 0){
-                int command_ind = 0;
-                int AU = word_to_arg(temp->commend, arg_ind, &command_ind, args, data);
-                if(AU < 0){
-                    return ERROR_VALUE;
-                }
-                apostrophe_update+=AU;
-                while(args[arg_ind] != NULL){
-                    if(arg_ind >= ARG_SIZE - 1){
-                        return ERROR_VALUE;
-                    }
-                    arg_ind++;
-                    AU = word_to_arg(temp->commend, arg_ind, &command_ind, args, data);
-                    if(AU < 0){
-                        return ERROR_VALUE;
-                    }
-                    apostrophe_update += AU;
-                }
-                arg_ind--;
-            }
-            temp = temp->next;
         }
         arg_ind++;
         int AU = word_to_arg(input, arg_ind, &input_ind, args, data);
@@ -382,7 +370,7 @@ NodeList* push(NodeList *head, char* name, char* commend, Data* data, char*args[
 
     // Create a new node
     NodeList* new_node = (NodeList*)malloc(sizeof(NodeList));
-    ASSERT_MALLOC(new_node != NULL, head)
+    ASSERT_MALLOC(new_node != NULL)
 
     // Initialize the new node
     new_node->alias = strdup(name);
