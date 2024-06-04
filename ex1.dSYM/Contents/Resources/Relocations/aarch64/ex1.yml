@@ -1,0 +1,19 @@
+---
+triple:          'arm64-apple-darwin'
+binary-path:     ex1
+relocations:
+  - { offsetInCU: 0x26, offset: 0x26, size: 0x8, addend: 0x0, symName: _main, symObjAddr: 0x0, symBinAddr: 0x100002554, symSize: 0x150 }
+  - { offsetInCU: 0x95, offset: 0x95, size: 0x8, addend: 0x0, symName: _main, symObjAddr: 0x0, symBinAddr: 0x100002554, symSize: 0x150 }
+  - { offsetInCU: 0xCC, offset: 0xCC, size: 0x8, addend: 0x0, symName: _run_input_command, symObjAddr: 0x150, symBinAddr: 0x1000026A4, symSize: 0x6D8 }
+  - { offsetInCU: 0x163, offset: 0x163, size: 0x8, addend: 0x0, symName: _free_lst, symObjAddr: 0x828, symBinAddr: 0x100002D7C, symSize: 0x58 }
+  - { offsetInCU: 0x1A6, offset: 0x1A6, size: 0x8, addend: 0x0, symName: _input_to_arg, symObjAddr: 0x880, symBinAddr: 0x100002DD4, symSize: 0x3BC }
+  - { offsetInCU: 0x285, offset: 0x285, size: 0x8, addend: 0x0, symName: _free_arg, symObjAddr: 0xC3C, symBinAddr: 0x100003190, symSize: 0x8C }
+  - { offsetInCU: 0x2C8, offset: 0x2C8, size: 0x8, addend: 0x0, symName: _print_lst, symObjAddr: 0xCC8, symBinAddr: 0x10000321C, symSize: 0xB8 }
+  - { offsetInCU: 0x2EE, offset: 0x2EE, size: 0x8, addend: 0x0, symName: _push, symObjAddr: 0xD80, symBinAddr: 0x1000032D4, symSize: 0x124 }
+  - { offsetInCU: 0x363, offset: 0x363, size: 0x8, addend: 0x0, symName: _delete_node, symObjAddr: 0xEA4, symBinAddr: 0x1000033F8, symSize: 0x198 }
+  - { offsetInCU: 0x3E6, offset: 0x3E6, size: 0x8, addend: 0x0, symName: _run_script_file, symObjAddr: 0x103C, symBinAddr: 0x100003590, symSize: 0x1CC }
+  - { offsetInCU: 0x465, offset: 0x465, size: 0x8, addend: 0x0, symName: _run_shell_command, symObjAddr: 0x1208, symBinAddr: 0x10000375C, symSize: 0xF0 }
+  - { offsetInCU: 0x4BB, offset: 0x4BB, size: 0x8, addend: 0x0, symName: _word_to_arg, symObjAddr: 0x12F8, symBinAddr: 0x10000384C, symSize: 0x4E4 }
+  - { offsetInCU: 0x567, offset: 0x567, size: 0x8, addend: 0x0, symName: _skip_spaces_tabs, symObjAddr: 0x17DC, symBinAddr: 0x100003D30, symSize: 0x80 }
+  - { offsetInCU: 0x59C, offset: 0x59C, size: 0x8, addend: 0x0, symName: _free_node, symObjAddr: 0x185C, symBinAddr: 0x100003DB0, symSize: 0x84 }
+...
