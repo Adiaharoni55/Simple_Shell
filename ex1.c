@@ -26,7 +26,9 @@ struct Data {
             script_lines_count,
             apostrophes_count;
     bool exit_flag,
-            error_flag;
+            error_flag,
+            wait_flag;
+    char* multiple_commands;
 } typedef Data;
 
 void free_lst(NodeList* head);
@@ -37,18 +39,19 @@ void print_lst(NodeList* head);
 
 // functions to run the terminal:
 int word_to_arg(const char* input, int arg_ind, int* input_ind, char* args[], Data* data);
-int input_to_arg(const char* input, char* arg[], Data* data);
+int input_to_arg(const char* input, char* arg[], Data* data, int *input_ind, int *arg_ind);
 void run_script_file(const char* file_name, char* arg[], Data* data);
 int run_shell_command(char* arg[], Data* data);
-void run_input_command(const char* input, Data* data);
+void run_input_command(const char* input, Data* data, int start_index_input);
 void free_arg(char* arg[]);
 void skip_spaces_tabs(const char* str, int *index);
+void run_arg_command(char* args[], Data* data, int apostrophes);
 #define ASSERT_MALLOC(condition) if(!(condition)) { perror("malloc"); free_lst(data->alias_lst); free_arg(args); exit(EXIT_FAILURE); }
-#define ASSERT_AND_FREE(condition) if (!(condition)) { printf("ERR\n"); free_arg(args); return; }
+#define ASSERT_AND_FREE(condition) if (!(condition)) { data->error_flag = true; printf("ERR\n"); free_arg(args); return; }
 
 int main() {
     char input[INPUT_SIZE];
-    Data data = {NULL, 0, 0, 0, 0, false, false};
+    Data data = {NULL, 0, 0, 0, 0, false, false, false, NULL};
     while(true){
         printf("#cmd:%d|#alias:%d|#script lines:%d> ",data.cmd_count, data.alias_count, data.script_lines_count);
         if(fgets(input, INPUT_SIZE, stdin) == NULL){
@@ -56,7 +59,7 @@ int main() {
         }
         input[strcspn(input, "\n")] = '\0';
         if(strlen(input) == 0) continue;
-        run_input_command(input, &data);
+        run_input_command(input, &data, 0);
         if(data.exit_flag){
             printf("%d", data.apostrophes_count);
             break;
@@ -66,23 +69,63 @@ int main() {
     return 0;
 }
 
+void run_input_command(const char* input, Data* data, int start_index_input){
+    data->multiple_commands = NULL;
+    data->error_flag = false;
+    data->wait_flag = true;
+    char* args[ARG_SIZE];
+    for(int i = 0; i < ARG_SIZE; i++){
+        args[i] = NULL;
+    }
+    int args_ind = 0;
+    int apostrophes = input_to_arg(input, args, data, &start_index_input, &args_ind);
+    if(args_ind > 0) args_ind --;
+    if(args[args_ind] == NULL){
+        return;
+    }
+    if(data->exit_flag){
+        free_arg(args);
+        return;
+    }
+
+    ASSERT_AND_FREE(apostrophes >= 0);
+    if(data->multiple_commands == NULL) {
+        if(strcmp(args[args_ind], "&") == 0){
+            free(args[args_ind]);
+            args[args_ind] = NULL;
+            data->wait_flag = false;
+        }
+        run_arg_command(args, data, apostrophes);
+        return;
+    }
+    free(args[args_ind]);
+    args[args_ind] = NULL;
+    if(args_ind > 0) args_ind --;
+    if(args[args_ind] != NULL){
+        if(strcmp(args[args_ind], "&") == 0){
+            free(args[args_ind]);
+            args[args_ind] = NULL;
+            data->wait_flag = false;
+        }
+        run_arg_command(args, data, apostrophes);
+    }
+    free_arg(args);
+    if((strcmp(data->multiple_commands, "&&") == 0 && data->error_flag) || (strcmp(data->multiple_commands, "||") == 0 && !(data->error_flag)) || input[start_index_input] == '\0'){
+        free(data->multiple_commands);
+        data->multiple_commands = NULL;
+        return;
+    }
+    free(data->multiple_commands);
+    data->multiple_commands = NULL;
+    run_input_command(input, data, start_index_input);
+}
+
 /**
  * 1. turn input into array of argument by other function.
  * 2. checks if it's alias/unalias/shell command and runs it accordingly.
  * @param input command from user / line from file.
  */
-void run_input_command(const char* input, Data* data){
-    data -> error_flag = false;
-    char* args[ARG_SIZE];
-    for(int i = 0; i < ARG_SIZE; i++){
-        args[i] = NULL;
-    }
-    int apostrophes = input_to_arg(input, args, data);
-    ASSERT_AND_FREE(apostrophes >= 0)
-    if(data->exit_flag || args[0] == NULL){
-        free_arg(args);
-        return;
-    }
+void run_arg_command(char* args[], Data* data, int apostrophes){
     if(strcmp(args[0], "alias") == 0){
         if(args[1] == NULL){
             print_lst(data->alias_lst);
@@ -148,6 +191,9 @@ void run_input_command(const char* input, Data* data){
         data->cmd_count++;
         if(apostrophes > 0) data->apostrophes_count++;
     }
+    else{
+        data->error_flag = true;
+    }
     free_arg(args);
 }
 
@@ -212,6 +258,9 @@ int word_to_arg(const char* input, int arg_ind, int* input_ind, char* args[], Da
         args[arg_ind][i] = input[start];
     }
     args[arg_ind][arg_len - 1] = '\0';
+    if(strcmp(args[arg_ind], "&&") == 0 || strcmp(args[arg_ind], "||") == 0){
+        data->multiple_commands = strdup(args[arg_ind]);
+    }
     if(is_quot) {
         (*input_ind)++;
         return 1;
@@ -223,49 +272,60 @@ int word_to_arg(const char* input, int arg_ind, int* input_ind, char* args[], Da
  * turns input into an array of arguments using word_to_arg function.
  * @return how many argument are apostrophe type, if invalid apostrophe -> returns -1;
  */
-int input_to_arg(const char input[], char* args[], Data* data){
-    int input_ind = 0, arg_ind = 0;
-    int apostrophe_update = word_to_arg(input, arg_ind, &input_ind, args, data);
+int input_to_arg(const char input[], char* args[], Data* data, int* input_ind, int*arg_ind){
+    int apostrophe_update = word_to_arg(input, *arg_ind, input_ind, args, data);
+    if(data->multiple_commands != NULL){
+        return apostrophe_update;
+    }
     if(apostrophe_update < 0) {
         return ERROR_VALUE;
     }
-    if(args[arg_ind] == NULL){
+    if(args[*arg_ind] == NULL){
         return 0;
     }
-    if(strcmp(args[arg_ind], "exit_shell") == 0){
+    if(strcmp(args[*arg_ind], "exit_shell") == 0){
         data->exit_flag = true;
         return apostrophe_update;
     }
     NodeList *temp = data->alias_lst;
     while(temp != NULL) {
-        if (strcmp(temp->alias, args[arg_ind]) == 0) {
+        if (strcmp(temp->alias, args[*arg_ind]) == 0) {
             int command_ind = 0;
-            int AU = word_to_arg(temp->commend, arg_ind, &command_ind, args, data);
+            int AU = word_to_arg(temp->commend, *arg_ind, &command_ind, args, data);
+            if(data->multiple_commands != NULL){
+                return apostrophe_update;
+            }
             if (AU < 0) {
                 return ERROR_VALUE;
             }
             apostrophe_update += AU;
-            while (args[arg_ind] != NULL) {
-                if (arg_ind >= ARG_SIZE - 1) {
+            while (args[*arg_ind] != NULL) {
+                if (*arg_ind >= ARG_SIZE - 1) {
                     return ERROR_VALUE;
                 }
-                arg_ind++;
-                AU = word_to_arg(temp->commend, arg_ind, &command_ind, args, data);
+                (*arg_ind)++;
+                AU = word_to_arg(temp->commend, *arg_ind, &command_ind, args, data);
+                if(data->multiple_commands != NULL){
+                    return apostrophe_update;
+                }
                 if (AU < 0) {
                     return ERROR_VALUE;
                 }
                 apostrophe_update += AU;
             }
-            arg_ind--;
+            (*arg_ind)--;
         }
         temp = temp->next;
     }
-    while(args[arg_ind] != NULL){
-        if(arg_ind >= ARG_SIZE - 1){
+    while(args[*arg_ind] != NULL){
+        if(*arg_ind >= ARG_SIZE - 1){
             return ERROR_VALUE;
         }
-        arg_ind++;
-        int AU = word_to_arg(input, arg_ind, &input_ind, args, data);
+        (*arg_ind)++;
+        int AU = word_to_arg(input, *arg_ind, input_ind, args, data);
+        if(data->multiple_commands != NULL){
+            return apostrophe_update;
+        }
         if(AU < 0) {
             return ERROR_VALUE;
         }
@@ -295,7 +355,7 @@ void run_script_file(const char* file_name, char* args[], Data* data){
         int i = 0;
         skip_spaces_tabs(command, &i);
         if (command[i] != '\0' && command[i] != '#') {
-            run_input_command(command, data);
+            run_input_command(command, data, 0);
         }
     }
     free_arg(args);
@@ -315,14 +375,16 @@ int run_shell_command(char* args[], Data *data){
         exit(EXIT_FAILURE);
     } else if (pid > 0) { // parent
         int status;
-        waitpid(pid, &status, 0);
-        if (WIFEXITED(status)) {
-            free_arg(args);
-            return WEXITSTATUS(status);
-        } else {
-            // Child process did not terminate normally
-            free_arg(args);
-            return ERROR_VALUE;
+        if(data->wait_flag) {
+            waitpid(pid, &status, 0);
+            if (WIFEXITED(status)) {
+                free_arg(args);
+                return WEXITSTATUS(status);
+            } else {
+                // Child process did not terminate normally
+                free_arg(args);
+                return ERROR_VALUE;
+            }
         }
     } else { // child
         execvp(args[0], args);
@@ -330,6 +392,7 @@ int run_shell_command(char* args[], Data *data){
         free_arg(args);
         _exit(EXIT_FAILURE);
     }
+    return 0;
 }
 
 void free_arg(char* arg[]){
