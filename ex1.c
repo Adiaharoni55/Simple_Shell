@@ -7,9 +7,10 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <stdbool.h>
+#include <errno.h>
 #define ARG_SIZE (6) // arg[0] = name of command, arg[1, 2, 3, 4] = arguments, arg[5] space for NULL
 #define INPUT_SIZE (1025)
-#define ERROR_VALUE (-1)
+
 
 // struct NodeList for aliases and its functions:
 struct NodeList{
@@ -30,18 +31,20 @@ struct Jobs{
 // data struct to keep elements the functions use
 struct Data {
     NodeList* alias_lst;
-    int alias_count,
+    int cmd_count,
+            alias_count,
             script_lines_count,
             apostrophes_count;
     bool error_flag,
             exit_flag,
-            wait_flag;
+            wait_flag,
+            wait_status,
+            is_quotes;
     char* multiple_commands;
 } typedef Data;
 
-
 // functions for struct Jobs:
-void  delete_job(pid_t pid);
+void delete_job(pid_t pid, int status);
 void add_job(pid_t pid, char* command);
 void print_jobs(Jobs* jobs_head);
 void free_jobs();
@@ -54,51 +57,66 @@ NodeList* delete_node(NodeList* head, char* name, Data* data);
 void print_lst(NodeList* head);
 
 // functions to run the terminal:
-int word_to_arg(const char* input, int arg_ind, int* input_ind, char* args[], Data* data);
-int input_to_arg(const char* input, char* arg[], Data* data, int *input_ind, int *arg_ind);
+void print_prompt(Data* data);
+void word_to_arg(const char* input, int arg_ind, int* input_ind, char* args[], Data* data);
+void input_to_arg(const char* input, char* arg[], Data* data, int *input_ind, int *arg_ind);
 void run_script_file(const char* file_name, char* arg[], Data* data);
-void run_shell_command(char* arg[], Data* data, int is_quotes);
+void run_shell_command(char* arg[], Data* data);
 void run_input_command(const char* input, Data* data, int start_index_input);
 void free_arg(char* arg[]);
 void skip_spaces_tabs(const char* str, int *index);
-void run_arg_command(char* args[], Data* data, int is_quotes);
+void run_arg_command(char* args[], Data* data);
 char* arg_into_str(char* args[]);
 #define ASSERT_MALLOC(condition) if(!(condition)) { perror("malloc"); free_lst(data->alias_lst); free_jobs(); free_arg(args); exit(EXIT_FAILURE); }
 #define ASSERT_AND_FREE(condition) if (!(condition)) { data->error_flag = true; printf("ERR\n"); free_arg(args); return; }
 
 // global elements so could change by signal:
-int cmd_count = 0;
 Jobs* jobs = NULL;
 int job_count = 1;
+bool error_in_child_process = false;
+Data *global_data = NULL;
 
-void child_error_handler(){
-    cmd_count--;
-}
-
-void handle_sigchld(int sig, siginfo_t *info, void *ucontext){
-    pid_t pid = info->si_pid;
-    delete_job(pid);
-    kill(pid, SIGKILL);
+void sigchld_handler(int sig, siginfo_t *info, void *context) {
+    int status;
+    pid_t pid;
+    if (sig == SIGCHLD) {
+        // Wait for all dead processes.
+        while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+            delete_job(pid, WEXITSTATUS(status));
+            if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+                global_data->cmd_count--;
+                global_data->error_flag = true;
+            }
+            else{
+                if (global_data->is_quotes && !error_in_child_process) {
+                    global_data->apostrophes_count++;
+                }
+            }
+        }
+    }
 }
 
 int main() {
-    struct sigaction sa;
-    sa.sa_sigaction = handle_sigchld;  // Use sa_sigaction instead of sa_handler
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_SIGINFO;  // Set the SA_SIGINFO flag
-    sigaction(SIGCHLD, &sa, NULL);
-    signal(SIGUSR1, child_error_handler);
     char input[INPUT_SIZE];
-    Data data = {NULL,0, 0, 0, false, false, NULL};
-    while(true){
-        printf("#cmd:%d|#alias:%d|#script lines:%d> ",cmd_count, data.alias_count, data.script_lines_count);
-        if(fgets(input, INPUT_SIZE, stdin) == NULL){
+    Data data = {NULL, 0,0, 0, 0,
+                 false, false, false, false,false, NULL};
+    global_data = &data; // Set the global data pointer
+
+    struct sigaction sa;
+    sa.sa_sigaction = sigchld_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+
+    while (true) {
+        sigaction(SIGCHLD, &sa, NULL);
+        print_prompt(&data);
+        if (fgets(input, INPUT_SIZE, stdin) == NULL) {
             continue;
         }
         input[strcspn(input, "\n")] = '\0';
-        if(strlen(input) == 0) continue;
+        if (strlen(input) == 0) continue;
         run_input_command(input, &data, 0);
-        if(data.exit_flag){
+        if (data.exit_flag) {
             printf("%d", data.apostrophes_count);
             break;
         }
@@ -108,13 +126,13 @@ int main() {
     return 0;
 }
 
+void print_prompt(Data* data){
+    printf("#cmd:%d|#alias:%d|#script lines:%d> ", data->cmd_count, data->alias_count, data->script_lines_count);
+    fflush(stdout);
+}
+
+
 void run_input_command(const char* input, Data* data, int start_index_input){
-//    Jobs *temp = jobs;
-//    while(temp != NULL){
-//        if(!is_process_running(temp->pid)){
-//            delete_job(temp->pid);
-//        }
-//    }
     data->multiple_commands = NULL;
     data->error_flag = false;
     data->wait_flag = true;
@@ -123,8 +141,12 @@ void run_input_command(const char* input, Data* data, int start_index_input){
         args[i] = NULL;
     }
     int args_ind = 0;
-    int is_quotes = input_to_arg(input, args, data, &start_index_input, &args_ind);
-    ASSERT_AND_FREE(is_quotes >= 0);
+    input_to_arg(input, args, data, &start_index_input, &args_ind);
+    if(data->error_flag){
+        printf("ERR\n");
+        free_arg(args);
+        return;
+    }
     if(data->exit_flag){
         free_arg(args);
         return;
@@ -139,7 +161,7 @@ void run_input_command(const char* input, Data* data, int start_index_input){
             args[args_ind][strlen(args[args_ind] - 1)] = '\0';
             data->wait_flag = false;
         }
-        run_arg_command(args, data, is_quotes);
+        run_arg_command(args, data);
         return;
     }
     free(args[args_ind]);
@@ -155,12 +177,12 @@ void run_input_command(const char* input, Data* data, int start_index_input){
             args[args_ind][strlen(args[args_ind] - 1)] = '\0';
             data->wait_flag = false;
         }
-        run_arg_command(args, data, is_quotes);
+        run_arg_command(args, data);
     }
     free_arg(args);
     if((strcmp(data->multiple_commands, "&&") == 0 && data->error_flag)
-            || (strcmp(data->multiple_commands, "||") == 0 && !(data->error_flag))
-            || input[start_index_input] == '\0'){
+       || (strcmp(data->multiple_commands, "||") == 0 && !(data->error_flag))
+       || input[start_index_input] == '\0'){
         free(data->multiple_commands);
         data->multiple_commands = NULL;
         return;
@@ -175,11 +197,11 @@ void run_input_command(const char* input, Data* data, int start_index_input){
  * 2. checks if it's alias/unalias/shell command and runs it accordingly.
  * @param input command from user / line from file.
  */
-void run_arg_command(char* args[], Data* data, int is_quotes){
+void run_arg_command(char* args[], Data* data){
     if(strcmp(args[0], "alias") == 0){
         if(args[1] == NULL){
             print_lst(data->alias_lst);
-            cmd_count++;
+            data->cmd_count++;
             free_arg(args);
             return;
         }
@@ -190,15 +212,15 @@ void run_arg_command(char* args[], Data* data, int is_quotes){
             ASSERT_AND_FREE(strlen(args[1]) != 0)
             data->alias_lst = push(data->alias_lst ,args[1], args[2], data, args);
             free_arg(args);
-            if(is_quotes > 0) data->apostrophes_count++;
-            cmd_count++;
+            if(data->is_quotes) data->apostrophes_count++;
+            data->cmd_count++;
             return;
         }
         ASSERT_AND_FREE(strcmp(args[2], "=") == 0 && args[3] != NULL && args[4] == NULL)
         data->alias_lst = push(data->alias_lst, args[1], args[3], data, args);
         free_arg(args);
-        if(is_quotes > 0) data->apostrophes_count++;
-        cmd_count++;
+        if(data->is_quotes) data->apostrophes_count++;
+        data->cmd_count++;
         return;
     }
     if(strcmp(args[0], "unalias") == 0){
@@ -206,8 +228,8 @@ void run_arg_command(char* args[], Data* data, int is_quotes){
         data->alias_lst = delete_node(data->alias_lst, args[1], data);
         free_arg(args);
         if(!data->error_flag){
-            if(is_quotes > 0) data->apostrophes_count++;
-            cmd_count++;
+            if(data->is_quotes) data->apostrophes_count++;
+            data->cmd_count++;
             return;
         }
         printf("ERR\n");
@@ -220,15 +242,15 @@ void run_arg_command(char* args[], Data* data, int is_quotes){
         run_script_file(args[1], args, data);
         free_arg(args);
         if(!data->error_flag) {
-            if(is_quotes > 0) data->apostrophes_count++;
-            cmd_count++;
+            if(data->is_quotes) data->apostrophes_count++;
+            data->cmd_count++;
         }
         return;
     }
     if(strcmp(args[0], "jobs") == 0){
         ASSERT_AND_FREE(args[1] == NULL)
         print_jobs(jobs);
-        cmd_count++;
+        data->cmd_count++;
         return;
     }
     if(strcmp(args[0], "cd") == 0){
@@ -238,11 +260,11 @@ void run_arg_command(char* args[], Data* data, int is_quotes){
             free_arg(args);
             return;
         }
-        cmd_count++;
+        data->cmd_count++;
         free_arg(args);
         return;
     }
-    run_shell_command(args, data, is_quotes);
+    run_shell_command(args, data);
     free_arg(args);
 }
 
@@ -253,49 +275,56 @@ void run_arg_command(char* args[], Data* data, int is_quotes){
  * @param input_ind where to start reading the input.
  * @return  if the argument was an apostrophe type. if invalid apostrophe: raises error flag;
  */
-int word_to_arg(const char* input, int arg_ind, int* input_ind, char* args[], Data* data){
-    if(args[arg_ind] != NULL){
+void word_to_arg(const char* input, int arg_ind, int* input_ind, char* args[], Data* data) {
+    if (args[arg_ind] != NULL) {
         free(args[arg_ind]);
         args[arg_ind] = NULL;
     }
-    bool is_quot = false;
     skip_spaces_tabs(input, input_ind);
-    if(input[*input_ind] == '\0') return 0;
+    if (input[*input_ind] == '\0') return;
     int start = *input_ind, arg_len = 1;
-    if(arg_ind == 0){ // finding the name of command
-        while(input[*input_ind] != '\0' && input[*input_ind] != ' ' && input[*input_ind] != '\t') {
+    if (arg_ind == 0) { // finding the name of command
+        while (input[*input_ind] != '\0' && input[*input_ind] != ' ' && input[*input_ind] != '\t') {
             if (input[*input_ind] == '\'' || input[*input_ind] == '"') {
                 char type = input[(*input_ind)];
                 (*input_ind)++, arg_len++;
+                if (input[*input_ind] == '\0') {
+                    data->error_flag = true;
+                    return;
+                }
                 while (input[*input_ind] != type) {
                     if (input[*input_ind] == '\0') {
-                        return ERROR_VALUE;
+                        data->error_flag = true;
+                        return;
                     }
                     (*input_ind)++, arg_len++;
                 }
-                is_quot = true;
+                data->is_quotes = true;
                 (*input_ind)++, arg_len++;
-            }
-            else {
+            } else {
                 (*input_ind)++, arg_len++;
             }
         }
-        if (is_quot && (input[start] == '\'' || input[start] == '"') && input[start] == input[(*input_ind) - 1]) {
-            start++, arg_len-=2;
+        if (data->is_quotes && (input[start] == '\'' || input[start] == '"') &&
+            input[start] == input[(*input_ind) - 1]) {
+            start++, arg_len -= 2;
         }
-    }
-    else if(input[*input_ind] == '\'' || input[*input_ind] == '"'){
+    } else if (input[*input_ind] == '\'' || input[*input_ind] == '"') {
         char type = input[(*input_ind)++];
         start++;
-        while(input[*input_ind] != type){
-            if(input[*input_ind] == '\0'){
-                return ERROR_VALUE;
+        if (input[*input_ind] == '\0') {
+            data->error_flag = true;
+            return;
+        }
+        while (input[*input_ind] != type) {
+            if (input[*input_ind] == '\0') {
+                data->error_flag = true;
+                return;
             }
             (*input_ind)++, arg_len++;
         }
-        is_quot = true;
-    }
-    else {
+        data->is_quotes = true;
+    } else {
         while (input[*input_ind] != '\0' && input[*input_ind] != ' ' && input[*input_ind] != '\t' &&
                input[*input_ind] != '\'' && input[*input_ind] != '"') {
             arg_len++, (*input_ind)++;
@@ -303,64 +332,49 @@ int word_to_arg(const char* input, int arg_ind, int* input_ind, char* args[], Da
     }
     args[arg_ind] = (char *) malloc(arg_len);
     ASSERT_MALLOC(args[arg_ind] != NULL)
-    for(int i = 0; i < arg_len - 1; i++, start++){
+    for (int i = 0; i < arg_len - 1; i++, start++) {
         args[arg_ind][i] = input[start];
     }
     args[arg_ind][arg_len - 1] = '\0';
-    if(strcmp(args[arg_ind], "&&") == 0 || strcmp(args[arg_ind], "||") == 0){
+    if (strcmp(args[arg_ind], "&&") == 0 || strcmp(args[arg_ind], "||") == 0) {
         data->multiple_commands = strdup(args[arg_ind]);
     }
-    if(is_quot) {
+    if (data->is_quotes) {
         (*input_ind)++;
-        return 1;
     }
-    return 0;
 }
 
 /**
  * turns input into an array of arguments using word_to_arg function.
  * @return how many argument are apostrophe type, if invalid apostrophe -> returns -1;
  */
-int input_to_arg(const char input[], char* args[], Data* data, int* input_ind, int*arg_ind){
-    int apostrophe_update = word_to_arg(input, *arg_ind, input_ind, args, data);
-    if(data->multiple_commands != NULL){
-        return apostrophe_update;
-    }
-    if(apostrophe_update < 0) {
-        return ERROR_VALUE;
-    }
-    if(args[*arg_ind] == NULL){
-        return 0;
+void input_to_arg(const char input[], char* args[], Data* data, int* input_ind, int*arg_ind){
+    word_to_arg(input, *arg_ind, input_ind, args, data);
+    if(args[*arg_ind] == NULL || data->error_flag || data->multiple_commands != NULL){
+        return;
     }
     if(strcmp(args[*arg_ind], "exit_shell") == 0){
         data->exit_flag = true;
-        return apostrophe_update;
+        return;
     }
     NodeList *temp = data->alias_lst;
     while(temp != NULL) {
         if (strcmp(temp->alias, args[*arg_ind]) == 0) {
             int command_ind = 0;
-            int AU = word_to_arg(temp->commend, *arg_ind, &command_ind, args, data);
-            if(data->multiple_commands != NULL){
-                return apostrophe_update;
+            word_to_arg(temp->commend, *arg_ind, &command_ind, args, data);
+            if(data->error_flag || data->multiple_commands != NULL){
+                return;
             }
-            if (AU < 0) {
-                return ERROR_VALUE;
-            }
-            apostrophe_update += AU;
             while (args[*arg_ind] != NULL) {
                 if (*arg_ind >= ARG_SIZE - 1) {
-                    return ERROR_VALUE;
+                    data->error_flag = true;
+                    return;
                 }
                 (*arg_ind)++;
-                AU = word_to_arg(temp->commend, *arg_ind, &command_ind, args, data);
-                if(data->multiple_commands != NULL){
-                    return apostrophe_update;
+                word_to_arg(temp->commend, *arg_ind, &command_ind, args, data);
+                if(data->multiple_commands != NULL || data->error_flag){
+                    return;
                 }
-                if (AU < 0) {
-                    return ERROR_VALUE;
-                }
-                apostrophe_update += AU;
             }
             (*arg_ind)--;
         }
@@ -368,20 +382,16 @@ int input_to_arg(const char input[], char* args[], Data* data, int* input_ind, i
     }
     while(args[*arg_ind] != NULL){
         if(*arg_ind >= ARG_SIZE - 1){
-            return ERROR_VALUE;
+            data->error_flag = true;
+            return;
         }
         (*arg_ind)++;
-        int AU = word_to_arg(input, *arg_ind, input_ind, args, data);
-        if(data->multiple_commands != NULL){
-            return apostrophe_update;
+        word_to_arg(input, *arg_ind, input_ind, args, data);
+        if(data->multiple_commands != NULL || data->error_flag){
+            return;
         }
-        if(AU < 0) {
-            return ERROR_VALUE;
-        }
-        apostrophe_update += AU;
     }
     (*arg_ind)--;
-    return apostrophe_update;
 }
 
 /**
@@ -416,7 +426,7 @@ void run_script_file(const char* file_name, char* args[], Data* data){
  * uses fork and args to run the command.
  * @return status: 0 for success, otherwise - error.
  */
-void run_shell_command(char* args[], Data *data, int is_quotes){
+void run_shell_command(char* args[], Data *data){
     pid_t pid = fork();
     if (pid < 0) {
         perror("fork");
@@ -425,39 +435,31 @@ void run_shell_command(char* args[], Data *data, int is_quotes){
         free_jobs();
         exit(EXIT_FAILURE);
     } else if (pid > 0) { // parent
-        if(data->wait_flag) {
-            pause();
+        data->cmd_count++;
+        if (data->wait_flag) {
+            data->wait_status = true;
+            pid_t child_pid = pid;
             int status;
-            waitpid(pid, &status, 0);
-            if (WIFEXITED(status)) {
-                if (WEXITSTATUS(status) == 0){
-                    cmd_count++;
-                    if(is_quotes > 0){
-                        data->apostrophes_count++;
+            pid_t waited_pid;
+            while ((waited_pid = waitpid(child_pid, &status, 0)) != child_pid) {
+                if (waited_pid == -1) {
+                    if (errno == ECHILD) {
+                        break;
                     }
-                    return;
                 }
-                else{
-                    data->error_flag = true;
-                }
-            } else {
-                // Child process did not terminate normally
-                data->error_flag = true;
             }
+            data->wait_status = false;
         }
-        else{
-            add_job(pid, arg_into_str(args));
-            cmd_count++;
+        else {
             usleep(100000);
+            add_job(pid, arg_into_str(args));
         }
         free_arg(args);
-    } else { // child
+    }
+    else { // child
         execvp(args[0], args);
         perror("exec");
         free_arg(args);
-        if(!(data->wait_flag)) {
-            kill(getppid(), SIGUSR1);
-        }
         _exit(EXIT_FAILURE);
     }
 }
@@ -590,48 +592,56 @@ char* arg_into_str(char* args[]){
     res[res_ind] = '\0';
     return res;
 }
+void delete_job(pid_t pid, int status) {
+    if (jobs == NULL) {
+        return;
+    }
 
-void  delete_job(pid_t pid){
-    if(jobs == NULL){
-        return;
-    }
-    if(jobs->pid == pid){
-        printf("\n[%d] \t Done \t\t %s\n", jobs->count, jobs->command);
-        Jobs* temp = jobs->next;
-        free(jobs);
-        jobs = temp;
-        if(jobs == NULL){
-            job_count = 1;
-        }
-        return;
-    }
-    Jobs* prev = jobs;
-    Jobs* cur = jobs->next;
-    while(cur != NULL){
-        if(cur->pid == pid){
-            printf("\n[%d] \t Done \t\t %s\n", jobs->count, jobs->command);
-            if(cur->next == NULL){
-                job_count = prev->count + 1;
+    Jobs* current = jobs;
+    Jobs* previous = NULL;
+
+    while (current != NULL) {
+        if (current->pid == pid) {
+            if(global_data->wait_status){
+                printf("[%d] Done \t %s\n", current->count, current->command);
             }
-            Jobs * temp = cur->next;
-            free(cur);
-            cur = NULL;
-            prev->next = temp;
+            else {
+                // Print the job status
+                if (!error_in_child_process) {
+                    printf("\n[%d] Done \t %s\n", current->count, current->command);
+                    print_prompt(global_data);
+                } else {
+                    printf("\n[%d] exit %d \t %s\n", current->count, status, current->command);
+                    error_in_child_process = false;
+                }
+            }
+
+            // Remove the job from the list
+            if (previous == NULL) { // Job to delete is the head
+                jobs = current->next;
+            } else {
+                previous->next = current->next;
+            }
+
+            free(current); // Free the memory for the job
+            job_count--; // Decrease the job count
             return;
         }
-        cur = cur->next;
-        prev = prev->next;
+        previous = current;
+        current = current->next;
     }
 }
 
+
 void add_job(pid_t pid, char* command){
-   Jobs *temp = jobs;
-   jobs = (Jobs*) malloc(sizeof(Jobs));
-   jobs->pid = pid;
-   jobs->count = job_count;
-   job_count++;
-   strcpy(jobs->command, command);
-   jobs->next = temp;
+    Jobs *temp = jobs;
+    jobs = (Jobs*) malloc(sizeof(Jobs));
+    jobs->pid = pid;
+    jobs->count = job_count;
+    job_count++;
+    strcpy(jobs->command, command);
+    jobs->next = temp;
+    printf("[%d] %d\n", jobs->count, jobs->pid);
 }
 
 void print_jobs(Jobs* jobs_head){
