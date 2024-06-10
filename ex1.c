@@ -1,5 +1,3 @@
-//211749361
-
 #include <stdio.h>
 #include <signal.h>
 #include <string.h>
@@ -11,11 +9,10 @@
 #define ARG_SIZE (6) // arg[0] = name of command, arg[1, 2, 3, 4] = arguments, arg[5] space for NULL
 #define INPUT_SIZE (1025)
 
-
 // struct NodeList for aliases and its functions:
 struct NodeList{
     char* alias;
-    char* commend;
+    char* command;
     struct NodeList* next;
 
 } typedef NodeList;
@@ -52,18 +49,18 @@ void free_jobs();
 // functions for struct NodeLIst:
 void free_lst(NodeList* head);
 void free_node(NodeList** node);
-NodeList* push(NodeList *head, char* name, char* commend, Data* data, char*args[]);
+NodeList* push(NodeList *head, char* name, char* command, Data* data, char* args[]);
 NodeList* delete_node(NodeList* head, char* name, Data* data);
 void print_lst(NodeList* head);
 
 // functions to run the terminal:
 void print_prompt(Data* data);
 void word_to_arg(const char* input, int arg_ind, int* input_ind, char* args[], Data* data);
-void input_to_arg(const char* input, char* arg[], Data* data, int *input_ind, int *arg_ind);
-void run_script_file(const char* file_name, char* arg[], Data* data);
-void run_shell_command(char* arg[], Data* data);
+void input_to_arg(const char* input, char* args[], Data* data, int *input_ind, int *arg_ind);
+void run_script_file(const char* file_name, char* args[], Data* data);
+void run_shell_command(char* args[], Data* data);
 void run_input_command(const char* input, Data* data, int start_index_input);
-void free_arg(char* arg[]);
+void free_arg(char* args[]);
 void skip_spaces_tabs(const char* str, int *index);
 void run_arg_command(char* args[], Data* data);
 char* arg_into_str(char* args[]);
@@ -82,24 +79,24 @@ void sigchld_handler(int sig, siginfo_t *info, void *context) {
     if (sig == SIGCHLD) {
         // Wait for all dead processes.
         while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
-            delete_job(pid, WEXITSTATUS(status));
-            if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
                 global_data->cmd_count--;
                 global_data->error_flag = true;
             }
-            else{
+            else {
                 if (global_data->is_quotes && !error_in_child_process) {
                     global_data->apostrophes_count++;
                 }
             }
+            delete_job(pid, WEXITSTATUS(status));
         }
     }
 }
 
 int main() {
     char input[INPUT_SIZE];
-    Data data = {NULL, 0,0, 0, 0,
-                 false, false, false, false,false, NULL};
+    Data data = {NULL, 0, 0, 0, 0,
+                 false, false, false, false, false, NULL};
     global_data = &data; // Set the global data pointer
 
     struct sigaction sa;
@@ -143,9 +140,7 @@ void run_input_command(const char* input, Data* data, int start_index_input){
     int args_ind = 0;
     input_to_arg(input, args, data, &start_index_input, &args_ind);
     if(data->error_flag){
-        printf("ERR\n");
-        free_arg(args);
-        return;
+        printf("ERR\n"); free_arg(args); return;
     }
     if(data->exit_flag){
         free_arg(args);
@@ -361,7 +356,7 @@ void input_to_arg(const char input[], char* args[], Data* data, int* input_ind, 
     while(temp != NULL) {
         if (strcmp(temp->alias, args[*arg_ind]) == 0) {
             int command_ind = 0;
-            word_to_arg(temp->commend, *arg_ind, &command_ind, args, data);
+            word_to_arg(temp->command, *arg_ind, &command_ind, args, data);
             if(data->error_flag || data->multiple_commands != NULL){
                 return;
             }
@@ -371,7 +366,7 @@ void input_to_arg(const char input[], char* args[], Data* data, int* input_ind, 
                     return;
                 }
                 (*arg_ind)++;
-                word_to_arg(temp->commend, *arg_ind, &command_ind, args, data);
+                word_to_arg(temp->command, *arg_ind, &command_ind, args, data);
                 if(data->multiple_commands != NULL || data->error_flag){
                     return;
                 }
@@ -435,11 +430,10 @@ void run_shell_command(char* args[], Data *data){
         free_jobs();
         exit(EXIT_FAILURE);
     } else if (pid > 0) { // parent
-        data->cmd_count++;
+        int status;
         if (data->wait_flag) {
             data->wait_status = true;
             pid_t child_pid = pid;
-            int status;
             pid_t waited_pid;
             while ((waited_pid = waitpid(child_pid, &status, 0)) != child_pid) {
                 if (waited_pid == -1) {
@@ -449,14 +443,22 @@ void run_shell_command(char* args[], Data *data){
                 }
             }
             data->wait_status = false;
-        }
-        else {
-            usleep(100000);
+            if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+                if(data->is_quotes){
+                    data->apostrophes_count++;
+                }
+                data->cmd_count++;
+            } else {
+                data->error_flag = true;
+            }
+        } else {
             add_job(pid, arg_into_str(args));
+            data->cmd_count++;
         }
         free_arg(args);
     }
     else { // child
+        usleep(100000);
         execvp(args[0], args);
         perror("exec");
         free_arg(args);
@@ -464,11 +466,11 @@ void run_shell_command(char* args[], Data *data){
     }
 }
 
-void free_arg(char* arg[]){
+void free_arg(char* args[]){
     for(int i = 0; i < ARG_SIZE; i++){
-        if(arg[i] != NULL) {
-            free(arg[i]);
-            arg[i] = NULL;
+        if(args[i] != NULL) {
+            free(args[i]);
+            args[i] = NULL;
         }
     }
 }
@@ -477,9 +479,9 @@ void free_node(NodeList** node){
     // free one node in the list
     if(node == NULL) return;
     free((*node)->alias);
-    free((*node)->commend);
+    free((*node)->command);
     (*node)->alias = NULL;
-    (*node)->commend = NULL;
+    (*node)->command = NULL;
     free((*node));
     (*node) = NULL;
 }
@@ -489,12 +491,12 @@ void free_node(NodeList** node){
  * @param name the shortcut the user want to use for the command.
  * @return the new head of the list.
  */
-NodeList* push(NodeList *head, char* name, char* commend, Data* data, char*args[]){
+NodeList* push(NodeList *head, char* name, char* command, Data* data, char* args[]){
     NodeList* temp = head;
     while (temp != NULL) {
         if (strcmp(name, temp->alias) == 0) {
-            free(temp->commend);
-            temp->commend = strdup(commend);  // Alias already exists, run over the old command
+            free(temp->command);
+            temp->command = strdup(command);  // Alias already exists, run over the old command
             return head;
         }
         temp = temp->next;
@@ -506,7 +508,7 @@ NodeList* push(NodeList *head, char* name, char* commend, Data* data, char*args[
 
     // Initialize the new node
     new_node->alias = strdup(name);
-    new_node->commend = strdup(commend);
+    new_node->command = strdup(command);
     new_node->next = head;
 
     data->alias_count++;
@@ -550,8 +552,8 @@ NodeList* delete_node(NodeList* head, char* name, Data* data){
 }
 
 void print_lst(NodeList* head){
-    while (head != NULL && head->alias != NULL && head->commend != NULL){
-        printf("%s='%s'\n", head->alias, head->commend);
+    while (head != NULL && head->alias != NULL && head->command != NULL){
+        printf("%s='%s'\n", head->alias, head->command);
         head = head->next;
     }
 }
@@ -602,7 +604,11 @@ void delete_job(pid_t pid, int status) {
 
     while (current != NULL) {
         if (current->pid == pid) {
-            if(global_data->wait_status){
+            if(global_data->error_flag){
+                printf("[%d] exit %d \t %s\n", current->count, status, current->command);
+                print_prompt(global_data);
+            }
+            else if(global_data->wait_status){
                 printf("[%d] Done \t %s\n", current->count, current->command);
             }
             else {
