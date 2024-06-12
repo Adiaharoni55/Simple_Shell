@@ -1,3 +1,6 @@
+// 211749361
+// Adi Aharoni
+
 #include <stdio.h>
 #include <signal.h>
 #include <string.h>
@@ -35,13 +38,14 @@ struct Data {
     bool error_flag,
             exit_flag,
             wait_flag,
-            wait_status,
-            is_quotes;
+            is_quotes,
+            error_to_file;
+    FILE* error_file;
     char* multiple_commands;
 } typedef Data;
 
 // functions for struct Jobs:
-void delete_job(pid_t pid, int status);
+void delete_job(pid_t pid);
 void add_job(pid_t pid, char* command);
 void print_jobs(Jobs* jobs_head);
 void free_jobs();
@@ -58,6 +62,7 @@ void print_prompt(Data* data);
 void word_to_arg(const char* input, int arg_ind, int* input_ind, char* args[], Data* data);
 void input_to_arg(const char* input, char* args[], Data* data, int *input_ind, int *arg_ind);
 void run_script_file(const char* file_name, char* args[], Data* data);
+void run_error_to_file_command(const char * file_name, char* args[], Data *data);
 void run_shell_command(char* args[], Data* data);
 void run_input_command(const char* input, Data* data, int start_index_input);
 void free_arg(char* args[]);
@@ -65,38 +70,20 @@ void skip_spaces_tabs(const char* str, int *index);
 void run_arg_command(char* args[], Data* data);
 char* arg_into_str(char* args[]);
 #define ASSERT_MALLOC(condition) if(!(condition)) { perror("malloc"); free_lst(data->alias_lst); free_jobs(); free_arg(args); exit(EXIT_FAILURE); }
-#define ASSERT_AND_FREE(condition) if (!(condition)) { data->error_flag = true; printf("ERR\n"); free_arg(args); return; }
+#define ASSERT_AND_FREE(condition) if (!(condition)) { data->error_flag = true; if(data->error_to_file){fprintf(data->error_file, "ERR\n");} \
+else{printf("ERR\n");} free_arg(args); return; }
 
 // global elements so could change by signal:
 Jobs* jobs = NULL;
 int job_count = 1;
-bool error_in_child_process = false;
 Data *global_data = NULL;
 
-void sigchld_handler(int sig, siginfo_t *info, void *context) {
-    int status;
-    pid_t pid;
-    if (sig == SIGCHLD) {
-        // Wait for all dead processes.
-        while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
-            if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
-                global_data->cmd_count--;
-                global_data->error_flag = true;
-            }
-            else {
-                if (global_data->is_quotes && !error_in_child_process) {
-                    global_data->apostrophes_count++;
-                }
-            }
-            delete_job(pid, WEXITSTATUS(status));
-        }
-    }
-}
+void sigchld_handler();
 
 int main() {
     char input[INPUT_SIZE];
     Data data = {NULL, 0, 0, 0, 0,
-                 false, false, false, false, false, NULL};
+                 false, false, false, false, false,NULL, NULL};
     global_data = &data; // Set the global data pointer
 
     struct sigaction sa;
@@ -123,6 +110,24 @@ int main() {
     return 0;
 }
 
+void sigchld_handler() {
+    int status;
+    pid_t pid;
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+            global_data->cmd_count--;
+            global_data->error_flag = true;
+        }
+        else {
+            if (global_data->is_quotes && !global_data->error_flag) {
+                global_data->apostrophes_count++;
+            }
+        }
+        delete_job(pid);
+        kill(pid, SIGKILL);
+    }
+}
+
 void print_prompt(Data* data){
     printf("#cmd:%d|#alias:%d|#script lines:%d> ", data->cmd_count, data->alias_count, data->script_lines_count);
     fflush(stdout);
@@ -133,6 +138,7 @@ void run_input_command(const char* input, Data* data, int start_index_input){
     data->multiple_commands = NULL;
     data->error_flag = false;
     data->wait_flag = true;
+    data->is_quotes = false;
     char* args[ARG_SIZE];
     for(int i = 0; i < ARG_SIZE; i++){
         args[i] = NULL;
@@ -140,20 +146,21 @@ void run_input_command(const char* input, Data* data, int start_index_input){
     int args_ind = 0;
     input_to_arg(input, args, data, &start_index_input, &args_ind);
     if(data->error_flag){
-        printf("ERR\n"); free_arg(args); return;
+        printf("ERR\n");
     }
-    if(data->exit_flag){
+    else if(data->exit_flag){
         free_arg(args);
         return;
     }
     if(data->multiple_commands == NULL) {
+        if(data->error_flag) return;
         if(strcmp(args[args_ind], "&") == 0){
             free(args[args_ind]);
             args[args_ind] = NULL;
             data->wait_flag = false;
         }
-        else if(args[args_ind][strlen(args[args_ind] - 1)] == '&'){
-            args[args_ind][strlen(args[args_ind] - 1)] = '\0';
+        else if(args[args_ind][strlen(args[args_ind]) - 1] == '&'){
+            args[args_ind][strlen(args[args_ind]) - 1] = '\0';
             data->wait_flag = false;
         }
         run_arg_command(args, data);
@@ -162,14 +169,14 @@ void run_input_command(const char* input, Data* data, int start_index_input){
     free(args[args_ind]);
     args[args_ind--] = NULL;
 
-    if(args[args_ind] != NULL){
+    if(args[args_ind] != NULL && args_ind >= 0){
         if(strcmp(args[args_ind], "&") == 0){
             free(args[args_ind]);
             args[args_ind] = NULL;
             data->wait_flag = false;
         }
-        else if(args[args_ind][strlen(args[args_ind] - 1)] == '&'){
-            args[args_ind][strlen(args[args_ind] - 1)] = '\0';
+        else if(args[args_ind][strlen(args[args_ind]) - 1] == '&'){
+            args[args_ind][strlen(args[args_ind]) - 1] = '\0';
             data->wait_flag = false;
         }
         run_arg_command(args, data);
@@ -227,7 +234,8 @@ void run_arg_command(char* args[], Data* data){
             data->cmd_count++;
             return;
         }
-        printf("ERR\n");
+        if(data->error_to_file){ fprintf(data->error_file, "ERR\n");}
+        else{printf("ERR\n");}
         return;
     }
     if(strcmp(args[0], "source") == 0){
@@ -251,7 +259,12 @@ void run_arg_command(char* args[], Data* data){
     if(strcmp(args[0], "cd") == 0){
         ASSERT_AND_FREE(args[1] != NULL)
         if (chdir(args[1]) == -1) {
-            perror("cd");
+            if(data->error_to_file) {
+                fprintf(data->error_file, "cd: %s\n", strerror(errno));
+            }
+            else{
+                perror("cd");
+            }
             free_arg(args);
             return;
         }
@@ -259,10 +272,64 @@ void run_arg_command(char* args[], Data* data){
         free_arg(args);
         return;
     }
+    if(args[1] != NULL){
+        char* file_name = NULL;
+        if(strcmp(args[1], "2>") == 0){
+            file_name = strdup(args[2]);
+        }
+        else if(strlen(args[1]) > 2 && args[1][0] == '2' && args[1][1] == '>'){
+            int size = 0, j =0;
+            for(int i = 2; args[1][i] != '\0'; i++, size++);
+            file_name = (char*) malloc(size+1);
+            for(int i = 2; j < size + 1; j++, i++){
+                file_name[j] = args[1][i];
+            }
+        }
+        if(file_name != NULL){
+            run_error_to_file_command(file_name, args, data);
+            free_arg(args);
+            free(file_name);
+            file_name = NULL;
+            return;
+        }
+    }
+
     run_shell_command(args, data);
     free_arg(args);
 }
-
+void run_error_to_file_command(const char * file_name ,char *args[], Data*data){
+    data->error_file = fopen(file_name, "w");
+    if(data->error_file == NULL){
+        perror("error opening file");
+        return;
+    }
+    data->error_to_file = true;
+    char*command = NULL;
+    if(args[0][0] == '('){
+        if(strlen(args[0]) <= 2 || args[0][strlen(args[0]) - 1] != ')'){
+            printf("ERR");
+            return;
+        }
+        int i = 1, size = 0;
+        for(; i < strlen(args[0]) - 2; i++, size++);
+        int j = 0;
+        command = (char*) malloc(size + 1);
+        for(i = 1; j < size; j++, i++){
+            command[j] = args[0][i];
+        }
+        command[size] = '\0';
+        run_input_command(command, data, 0);
+    }
+    else{
+        command = strdup(args[0]);
+        run_shell_command(args, data);
+    }
+    fclose(data->error_file);
+    free(command);
+    command = NULL;
+    free_arg(args);
+    data->error_to_file = false;
+}
 /**
  * Find one argument and put it in args[arg_ind];
  * @param input command from user / line from file.
@@ -363,6 +430,15 @@ void input_to_arg(const char input[], char* args[], Data* data, int* input_ind, 
             while (args[*arg_ind] != NULL) {
                 if (*arg_ind >= ARG_SIZE - 1) {
                     data->error_flag = true;
+                    // find if there is an or command that need to be executed after the error.
+                    *arg_ind = 0;
+                    while(args[*arg_ind] != NULL){
+                        free_arg(args);
+                        word_to_arg(input, *arg_ind, input_ind, args, data);
+                        if(data->multiple_commands != NULL){
+                            return;
+                        }
+                    }
                     return;
                 }
                 (*arg_ind)++;
@@ -378,6 +454,15 @@ void input_to_arg(const char input[], char* args[], Data* data, int* input_ind, 
     while(args[*arg_ind] != NULL){
         if(*arg_ind >= ARG_SIZE - 1){
             data->error_flag = true;
+            // find if there is an or command that need to be executed after the error.
+            *arg_ind = 0;
+            while(args[*arg_ind] != NULL){
+                free_arg(args);
+                word_to_arg(input, *arg_ind, input_ind, args, data);
+                if(data->multiple_commands != NULL){
+                    return;
+                }
+            }
             return;
         }
         (*arg_ind)++;
@@ -395,12 +480,16 @@ void input_to_arg(const char input[], char* args[], Data* data, int* input_ind, 
  */
 void run_script_file(const char* file_name, char* args[], Data* data){
     FILE *fp = fopen(file_name, "r");
+    free_arg(args);
     if(fp == NULL){
-        data->error_flag = true;
-        perror("Error opening file");
+        if(data->error_to_file){
+            fprintf(data->error_file, "error opening file: %s\n", strerror(errno));
+        }
+        else {
+            perror("error opening file");
+        }
         return;
     }
-    free_arg(args);
     //check if first there is #!/bin/bash
     char command[INPUT_SIZE];
     ASSERT_AND_FREE(fgets(command, INPUT_SIZE, fp) != NULL && strcmp(command, "#!/bin/bash\n") == 0)
@@ -432,7 +521,7 @@ void run_shell_command(char* args[], Data *data){
     } else if (pid > 0) { // parent
         int status;
         if (data->wait_flag) {
-            data->wait_status = true;
+            //data->wait_status = true;
             pid_t child_pid = pid;
             pid_t waited_pid;
             while ((waited_pid = waitpid(child_pid, &status, 0)) != child_pid) {
@@ -442,7 +531,7 @@ void run_shell_command(char* args[], Data *data){
                     }
                 }
             }
-            data->wait_status = false;
+            //data->wait_status = false;
             if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
                 if(data->is_quotes){
                     data->apostrophes_count++;
@@ -453,14 +542,19 @@ void run_shell_command(char* args[], Data *data){
             }
         } else {
             add_job(pid, arg_into_str(args));
+            usleep(10000);
             data->cmd_count++;
         }
         free_arg(args);
     }
     else { // child
-        usleep(100000);
         execvp(args[0], args);
-        perror("exec");
+        if(data->error_to_file){
+            fprintf(data->error_file, "exec: %s\n", strerror(errno));
+        }
+        else{
+            perror("exec");
+        }
         free_arg(args);
         _exit(EXIT_FAILURE);
     }
@@ -594,43 +688,49 @@ char* arg_into_str(char* args[]){
     res[res_ind] = '\0';
     return res;
 }
-void delete_job(pid_t pid, int status) {
+
+/**
+ * delete a job and print it on the screen-> if error "exit", otherwise: "done".
+ * @param pid of job to delete
+ * @param status if a job got an error, the status will be printed.
+ */
+void delete_job(pid_t pid) {
     if (jobs == NULL) {
         return;
     }
-
     Jobs* current = jobs;
     Jobs* previous = NULL;
 
     while (current != NULL) {
         if (current->pid == pid) {
-            if(global_data->error_flag){
-                printf("[%d] exit %d \t %s\n", current->count, status, current->command);
-                print_prompt(global_data);
-            }
-            else if(global_data->wait_status){
-                printf("[%d] Done \t %s\n", current->count, current->command);
-            }
-            else {
-                // Print the job status
-                if (!error_in_child_process) {
-                    printf("\n[%d] Done \t %s\n", current->count, current->command);
-                    print_prompt(global_data);
-                } else {
-                    printf("\n[%d] exit %d \t %s\n", current->count, status, current->command);
-                    error_in_child_process = false;
+//            // for the running proccess to work like the terminal:
+//            if(global_data->error_flag){
+//                printf("[%d] exit %d \t %s\n", current->count, status, current->command);
+//                print_prompt(global_data);
+//            }
+//            else if(global_data->wait_status){
+//                printf("[%d] Done \t %s\n", current->count, current->command);
+//            }
+//            else {
+//                printf("\n[%d] Done \t %s\n", current->count, current->command);
+//                print_prompt(global_data);
+//            }
+            if (previous == NULL) {
+                jobs = current->next;
+                if(current->next == NULL){
+                    job_count = 1;
+                }
+                else{
+                    job_count = current->next->count + 1;
                 }
             }
-
-            // Remove the job from the list
-            if (previous == NULL) { // Job to delete is the head
-                jobs = current->next;
-            } else {
+            else {
                 previous->next = current->next;
             }
-
-            free(current); // Free the memory for the job
-            job_count--; // Decrease the job count
+            if(jobs == NULL){
+                job_count = 1;
+            }
+            free(current);
             return;
         }
         previous = current;
@@ -638,7 +738,11 @@ void delete_job(pid_t pid, int status) {
     }
 }
 
-
+/**
+ * for commands that finishes with & - add to jobs to the beginning of the list.
+ * @param pid the pid of the job to add
+ * @param command of the job ro add.
+ */
 void add_job(pid_t pid, char* command){
     Jobs *temp = jobs;
     jobs = (Jobs*) malloc(sizeof(Jobs));
@@ -647,7 +751,6 @@ void add_job(pid_t pid, char* command){
     job_count++;
     strcpy(jobs->command, command);
     jobs->next = temp;
-    printf("[%d] %d\n", jobs->count, jobs->pid);
 }
 
 void print_jobs(Jobs* jobs_head){
@@ -655,7 +758,7 @@ void print_jobs(Jobs* jobs_head){
         return;
     }
     print_jobs(jobs_head->next);
-    printf("[%d] \t Running \t %s &\n", jobs_head->count, jobs_head->command);
+    printf("[%d] %s &\n", jobs_head->count, jobs_head->command);
 }
 
 void free_jobs() {
