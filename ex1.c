@@ -40,6 +40,7 @@ struct Data {
             wait_flag,
             is_quotes,
             error_to_file;
+    // wait_status;
     FILE* error_file;
     char* multiple_commands;
 } typedef Data;
@@ -84,8 +85,6 @@ int main() {
     char input[INPUT_SIZE];
     Data data = {NULL, 0, 0, 0, 0,
                  false, false, false, false, false,NULL, NULL};
-    global_data = &data; // Set the global data pointer
-
     struct sigaction sa;
     sa.sa_sigaction = sigchld_handler;
     sigemptyset(&sa.sa_mask);
@@ -124,7 +123,6 @@ void sigchld_handler() {
             }
         }
         delete_job(pid);
-        kill(pid, SIGKILL);
     }
 }
 
@@ -145,15 +143,19 @@ void run_input_command(const char* input, Data* data, int start_index_input){
     }
     int args_ind = 0;
     input_to_arg(input, args, data, &start_index_input, &args_ind);
-    if(data->error_flag){
-        printf("ERR\n");
+    if(data->error_flag && (!data->error_to_file || data->error_file != NULL)){
+        if(data->error_to_file){fprintf(data->error_file, "ERR\n");}
+        else{printf("ERR\n");}
     }
     else if(data->exit_flag){
         free_arg(args);
         return;
     }
     if(data->multiple_commands == NULL) {
-        if(data->error_flag) return;
+        if(args[args_ind] == NULL) {
+            free_arg(args);
+            return;
+        }
         if(strcmp(args[args_ind], "&") == 0){
             free(args[args_ind]);
             args[args_ind] = NULL;
@@ -163,7 +165,26 @@ void run_input_command(const char* input, Data* data, int start_index_input){
             args[args_ind][strlen(args[args_ind]) - 1] = '\0';
             data->wait_flag = false;
         }
+        if(data->error_to_file && data->error_file == NULL){
+            free(args[args_ind]);
+            args[args_ind] = NULL;
+            word_to_arg(input, args_ind, &start_index_input, args, data);
+            if(args[args_ind] == NULL){
+                free_arg(args);
+                return;
+            }
+            char *file_name = strdup(args[args_ind]);
+            free(args[args_ind]);
+            args[args_ind] = NULL;
+            args_ind--;
+            run_error_to_file_command(file_name, args, data);
+            free(file_name);
+            data->error_to_file = false;
+            free_arg(args);
+            return;
+        }
         run_arg_command(args, data);
+        free_arg(args);
         return;
     }
     free(args[args_ind]);
@@ -182,16 +203,53 @@ void run_input_command(const char* input, Data* data, int start_index_input){
         run_arg_command(args, data);
     }
     free_arg(args);
+    args_ind = 0;
     if((strcmp(data->multiple_commands, "&&") == 0 && data->error_flag)
        || (strcmp(data->multiple_commands, "||") == 0 && !(data->error_flag))
        || input[start_index_input] == '\0'){
+//        if(strcmp(data->multiple_commands, "||") == 0){ // check if there's a && command after || command:
+//            word_to_arg(input, args_ind, &start_index_input, args, data);
+//            while(args[0] != NULL){
+//                if(data->error_flag){
+//                    break;
+//                }
+//                else if(strcmp(args[0], "&&") == 0){
+//                    data->multiple_commands = strdup(args[0]);
+//                    free_arg(args);
+//                    return run_input_command(input, data, start_index_input);
+//                }
+//                free(args[0]);
+//                args[0] = NULL;
+//                word_to_arg(input, args_ind, &start_index_input, args, data);
+//            }
+//        }
+//        else if(strcmp(data->multiple_commands, "&&") == 0){ // check if there's an || after a wrong &&:
+//            data->error_flag = false;
+//            word_to_arg(input, args_ind, &start_index_input, args, data);
+//            while(args[0] != NULL){
+//                if(data->error_flag){
+//                    break;
+//                }
+//                else if(strcmp(args[0], "||") == 0){
+//                    data->multiple_commands = strdup(args[0]);
+//                    free_arg(args);
+//                    return run_input_command(input, data, start_index_input);
+//                }
+//                free(args[0]);
+//                args[0] = NULL;
+//                word_to_arg(input, args_ind, &start_index_input, args, data);
+//            }
+//        }
+
         free(data->multiple_commands);
         data->multiple_commands = NULL;
+        free_arg(args);
         return;
     }
     free(data->multiple_commands);
     data->multiple_commands = NULL;
-    run_input_command(input, data, start_index_input);
+    free_arg(args);
+    return run_input_command(input, data, start_index_input);
 }
 
 /**
@@ -204,7 +262,6 @@ void run_arg_command(char* args[], Data* data){
         if(args[1] == NULL){
             print_lst(data->alias_lst);
             data->cmd_count++;
-            free_arg(args);
             return;
         }
         ASSERT_AND_FREE(args[2]!=NULL)
@@ -265,70 +322,54 @@ void run_arg_command(char* args[], Data* data){
             else{
                 perror("cd");
             }
-            free_arg(args);
             return;
         }
         data->cmd_count++;
-        free_arg(args);
         return;
     }
-    if(args[1] != NULL){
-        char* file_name = NULL;
-        if(strcmp(args[1], "2>") == 0){
-            file_name = strdup(args[2]);
-        }
-        else if(strlen(args[1]) > 2 && args[1][0] == '2' && args[1][1] == '>'){
-            int size = 0, j =0;
-            for(int i = 2; args[1][i] != '\0'; i++, size++);
-            file_name = (char*) malloc(size+1);
-            for(int i = 2; j < size + 1; j++, i++){
-                file_name[j] = args[1][i];
-            }
-        }
-        if(file_name != NULL){
-            run_error_to_file_command(file_name, args, data);
-            free_arg(args);
-            free(file_name);
-            file_name = NULL;
-            return;
-        }
-    }
-
     run_shell_command(args, data);
-    free_arg(args);
 }
+
 void run_error_to_file_command(const char * file_name ,char *args[], Data*data){
+    if(file_name == NULL){
+        printf("ERR\n");
+        return;
+    }
+    if(args[0] == NULL){
+        return;
+    }
     data->error_file = fopen(file_name, "w");
     if(data->error_file == NULL){
         perror("error opening file");
         return;
     }
-    data->error_to_file = true;
     char*command = NULL;
+    if(data->error_flag){
+        fprintf(data->error_file, "ERR\n");
+        fclose(data->error_file);
+        data->error_file = NULL;
+        return;
+    }
     if(args[0][0] == '('){
-        if(strlen(args[0]) <= 2 || args[0][strlen(args[0]) - 1] != ')'){
-            printf("ERR");
-            return;
-        }
         int i = 1, size = 0;
-        for(; i < strlen(args[0]) - 2; i++, size++);
+        for(; i < strlen(args[0]) - 1; i++, size++);
         int j = 0;
         command = (char*) malloc(size + 1);
         for(i = 1; j < size; j++, i++){
             command[j] = args[0][i];
         }
         command[size] = '\0';
+        free_arg(args);
         run_input_command(command, data, 0);
     }
     else{
-        command = strdup(args[0]);
         run_shell_command(args, data);
     }
+
     fclose(data->error_file);
+    data->error_file = NULL;
     free(command);
     command = NULL;
-    free_arg(args);
-    data->error_to_file = false;
 }
 /**
  * Find one argument and put it in args[arg_ind];
@@ -345,10 +386,15 @@ void word_to_arg(const char* input, int arg_ind, int* input_ind, char* args[], D
     skip_spaces_tabs(input, input_ind);
     if (input[*input_ind] == '\0') return;
     int start = *input_ind, arg_len = 1;
-    if (arg_ind == 0) { // finding the name of command
+    if (arg_ind == 0) {// finding the name of command
+        bool brackets = (input[*input_ind] == '(');
         while (input[*input_ind] != '\0' && input[*input_ind] != ' ' && input[*input_ind] != '\t') {
-            if (input[*input_ind] == '\'' || input[*input_ind] == '"') {
-                char type = input[(*input_ind)];
+            if (input[*input_ind] == '\'' || input[*input_ind] == '"' || brackets) {
+                char type;
+                if(brackets)
+                    type = ')';
+                else
+                    type = input[(*input_ind)];
                 (*input_ind)++, arg_len++;
                 if (input[*input_ind] == '\0') {
                     data->error_flag = true;
@@ -361,8 +407,13 @@ void word_to_arg(const char* input, int arg_ind, int* input_ind, char* args[], D
                     }
                     (*input_ind)++, arg_len++;
                 }
-                data->is_quotes = true;
                 (*input_ind)++, arg_len++;
+                if(!brackets) {
+                    data->is_quotes = true;
+                }
+                else{
+                    break;
+                }
             } else {
                 (*input_ind)++, arg_len++;
             }
@@ -401,6 +452,9 @@ void word_to_arg(const char* input, int arg_ind, int* input_ind, char* args[], D
     if (strcmp(args[arg_ind], "&&") == 0 || strcmp(args[arg_ind], "||") == 0) {
         data->multiple_commands = strdup(args[arg_ind]);
     }
+    else if(strcmp(args[arg_ind], "2>") == 0){
+        data->error_to_file = true;
+    }
     if (data->is_quotes) {
         (*input_ind)++;
     }
@@ -412,7 +466,7 @@ void word_to_arg(const char* input, int arg_ind, int* input_ind, char* args[], D
  */
 void input_to_arg(const char input[], char* args[], Data* data, int* input_ind, int*arg_ind){
     word_to_arg(input, *arg_ind, input_ind, args, data);
-    if(args[*arg_ind] == NULL || data->error_flag || data->multiple_commands != NULL){
+    if(args[*arg_ind] == NULL || data->error_flag || data->multiple_commands != NULL || (data->error_to_file && data->error_file == NULL)){
         return;
     }
     if(strcmp(args[*arg_ind], "exit_shell") == 0){
@@ -424,7 +478,7 @@ void input_to_arg(const char input[], char* args[], Data* data, int* input_ind, 
         if (strcmp(temp->alias, args[*arg_ind]) == 0) {
             int command_ind = 0;
             word_to_arg(temp->command, *arg_ind, &command_ind, args, data);
-            if(data->error_flag || data->multiple_commands != NULL){
+            if(data->error_flag || data->multiple_commands != NULL || (data->error_to_file && data->error_file == NULL)){
                 return;
             }
             while (args[*arg_ind] != NULL) {
@@ -435,7 +489,7 @@ void input_to_arg(const char input[], char* args[], Data* data, int* input_ind, 
                     while(args[*arg_ind] != NULL){
                         free_arg(args);
                         word_to_arg(input, *arg_ind, input_ind, args, data);
-                        if(data->multiple_commands != NULL){
+                        if(data->multiple_commands != NULL || (data->error_to_file && data->error_file == NULL)){
                             return;
                         }
                     }
@@ -443,7 +497,7 @@ void input_to_arg(const char input[], char* args[], Data* data, int* input_ind, 
                 }
                 (*arg_ind)++;
                 word_to_arg(temp->command, *arg_ind, &command_ind, args, data);
-                if(data->multiple_commands != NULL || data->error_flag){
+                if(data->multiple_commands != NULL || data->error_flag || (data->error_to_file && data->error_file == NULL)){
                     return;
                 }
             }
@@ -459,7 +513,7 @@ void input_to_arg(const char input[], char* args[], Data* data, int* input_ind, 
             while(args[*arg_ind] != NULL){
                 free_arg(args);
                 word_to_arg(input, *arg_ind, input_ind, args, data);
-                if(data->multiple_commands != NULL){
+                if(data->multiple_commands != NULL || (data->error_to_file && data->error_file == NULL)){
                     return;
                 }
             }
@@ -467,7 +521,7 @@ void input_to_arg(const char input[], char* args[], Data* data, int* input_ind, 
         }
         (*arg_ind)++;
         word_to_arg(input, *arg_ind, input_ind, args, data);
-        if(data->multiple_commands != NULL || data->error_flag){
+        if(data->multiple_commands != NULL || data->error_flag || (data->error_to_file && data->error_file == NULL)){
             return;
         }
     }
@@ -511,6 +565,7 @@ void run_script_file(const char* file_name, char* args[], Data* data){
  * @return status: 0 for success, otherwise - error.
  */
 void run_shell_command(char* args[], Data *data){
+    global_data = data; // make data global so that sig_child handler can use the data.
     pid_t pid = fork();
     if (pid < 0) {
         perror("fork");
@@ -521,17 +576,9 @@ void run_shell_command(char* args[], Data *data){
     } else if (pid > 0) { // parent
         int status;
         if (data->wait_flag) {
-            //data->wait_status = true;
+//             data->wait_status = true;
             pid_t child_pid = pid;
-            pid_t waited_pid;
-            while ((waited_pid = waitpid(child_pid, &status, 0)) != child_pid) {
-                if (waited_pid == -1) {
-                    if (errno == ECHILD) {
-                        break;
-                    }
-                }
-            }
-            //data->wait_status = false;
+            waitpid(child_pid, &status, 0);
             if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
                 if(data->is_quotes){
                     data->apostrophes_count++;
@@ -540,6 +587,7 @@ void run_shell_command(char* args[], Data *data){
             } else {
                 data->error_flag = true;
             }
+//             data->wait_status = false;
         } else {
             add_job(pid, arg_into_str(args));
             usleep(10000);
@@ -548,13 +596,13 @@ void run_shell_command(char* args[], Data *data){
         free_arg(args);
     }
     else { // child
+        if (data->error_to_file) {
+            int error_fd = fileno(data->error_file);
+            dup2(error_fd, STDERR_FILENO);
+            close(error_fd);
+        }
         execvp(args[0], args);
-        if(data->error_to_file){
-            fprintf(data->error_file, "exec: %s\n", strerror(errno));
-        }
-        else{
-            perror("exec");
-        }
+        perror("exec");
         free_arg(args);
         _exit(EXIT_FAILURE);
     }
@@ -703,9 +751,10 @@ void delete_job(pid_t pid) {
 
     while (current != NULL) {
         if (current->pid == pid) {
-//            // for the running proccess to work like the terminal:
+            // to delete from here
+            // for the running process to work like the terminal:
 //            if(global_data->error_flag){
-//                printf("[%d] exit %d \t %s\n", current->count, status, current->command);
+//                printf("[%d] exit %d\t %s\n", current->count, status ,current->command);
 //                print_prompt(global_data);
 //            }
 //            else if(global_data->wait_status){
@@ -715,6 +764,7 @@ void delete_job(pid_t pid) {
 //                printf("\n[%d] Done \t %s\n", current->count, current->command);
 //                print_prompt(global_data);
 //            }
+            // to delete until here
             if (previous == NULL) {
                 jobs = current->next;
                 if(current->next == NULL){
